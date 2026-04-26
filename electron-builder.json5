@@ -34,7 +34,7 @@
   "publish": [
     {
       "provider": "github",
-      "owner": "Samer-Gassouma",
+      "owner": "BackendGlitch",
       "repo": "wasla_nabel_staff",
       "releaseType": "release",
       "private": false

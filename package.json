@@ -52,6 +52,6 @@
   "main": "dist-electron/main.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Samer-Gassouma/wasla_nabel_staff.git"
+    "url": "git@github.com:BackendGlitch/wasla_nabel_staff.git"
   }
 }
