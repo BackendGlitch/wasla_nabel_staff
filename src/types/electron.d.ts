@@ -55,9 +55,18 @@ export interface WaslaAPI {
   checkPrinter: () => Promise<WaslaPrinterHealth>
 }
 
+/** Exposed by electron/preload.ts (contextBridge `ipcRenderer`). */
+export interface IpcRendererBridge {
+  on: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => void
+  off: (channel: string, listener: (...args: unknown[]) => void) => void
+  send: (channel: string, ...args: unknown[]) => void
+  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+}
+
 declare global {
   interface Window {
     electronAPI?: ElectronAPI
     wasla?: WaslaAPI
+    ipcRenderer?: IpcRendererBridge
   }
 }

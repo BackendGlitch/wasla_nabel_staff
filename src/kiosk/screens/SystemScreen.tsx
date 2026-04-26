@@ -119,7 +119,34 @@ export function SystemScreen({
               </svg>
             </button>
 
-           
+            <button
+              type="button"
+              onClick={onOpenAddVehicle}
+              className="w-full rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50 text-slate-800 font-semibold flex items-center justify-between transition-colors"
+              style={{ minHeight: TouchSize.row, paddingInline: Spacing.md }}
+            >
+              <span className="flex items-center gap-3">
+                <svg
+                  className="w-5 h-5 text-slate-500"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                Ajouter un véhicule
+              </span>
+              <svg
+                className="w-5 h-5 text-slate-300"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
           </div>
         </section>
 
