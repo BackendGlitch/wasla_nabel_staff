@@ -34,7 +34,7 @@
   "publish": [
     {
       "provider": "github",
-      "owner": "N3on404",
+      "owner": "Samer-Gassouma",
       "repo": "wasla_nabel_staff",
       "releaseType": "release",
       "private": false
