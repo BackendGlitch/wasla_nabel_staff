@@ -1,0 +1,43 @@
+// @see - https://www.electron.build/configuration/configuration
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.wasla.choice",
+  "asar": true,
+  "productName": "Wasla Choice",
+  "directories": {
+    "output": "release/${version}"
+  },
+  "files": [
+    "dist",
+    "dist-electron"
+  ],
+  "icon": "public/icons/icon-256x256.png",
+  "win": {
+    "icon": "public/icons/icon-256x256.png",
+    "publisherName": ["STE Dhraiff Services Transport"],
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false
+  },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "N3on404",
+      "repo": "wasla_nabel_staff",
+      "releaseType": "release",
+      "private": false
+    }
+  ]
+}
