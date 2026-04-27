@@ -386,6 +386,12 @@ function setupAutoUpdater() {
   try {
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
+    if (process.platform === 'win32') {
+      const nsis = autoUpdater as typeof autoUpdater & {
+        verifyUpdateCodeSignature: (fn: (publisherNames: string[], file: string) => Promise<string | null>) => void
+      }
+      nsis.verifyUpdateCodeSignature = async () => null
+    }
 
     setInterval(() => {
       autoUpdater.checkForUpdates().catch((err) => console.error('check updates:', err))
@@ -417,7 +423,6 @@ function setupAutoUpdater() {
     })
     autoUpdater.on('update-downloaded', (info) => {
       win?.webContents.send('update-downloaded', { version: info.version })
-      setTimeout(() => autoUpdater.quitAndInstall(false, true), 2000)
     })
 
     ipcMain.handle('check-for-updates', async () => {
@@ -440,7 +445,7 @@ function setupAutoUpdater() {
     })
     ipcMain.handle('install-update', async () => {
       try {
-        autoUpdater.quitAndInstall(false, true)
+        autoUpdater.quitAndInstall(true, true)
         return { success: true }
       } catch (error) {
         const err = error as Error

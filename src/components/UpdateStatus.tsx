@@ -189,15 +189,15 @@ export default function UpdateStatus({ className }: UpdateStatusProps) {
       )}
 
       {updateStatus === 'error' && errorMessage && (
-        <div className="flex items-center gap-2">
-          <div className="text-xs text-red-600">
-            Erreur
+        <div className="flex items-start gap-2 max-w-md">
+          <div className="text-xs text-red-600 break-words flex-1 max-h-20 overflow-y-auto" title={errorMessage}>
+            {errorMessage}
           </div>
           <Button
             variant="outline"
             size="sm"
             onClick={handleCheckForUpdates}
-            className="h-7 px-2 text-xs"
+            className="h-7 px-2 text-xs shrink-0"
           >
             Réessayer
           </Button>
