@@ -25,6 +25,8 @@ declare namespace NodeJS {
     STAFF_MACHINE_ID?: string
     /** Raw device path used by wasla:print-bytes. Defaults to /dev/usb/lp0 on linux. */
     STAFF_PRINTER_DEVICE?: string
+    /** Baud rate for Windows COM (e.g. ZKTeco ZKP8003). Default 9600. */
+    STAFF_PRINTER_BAUD?: string
   }
 }
 

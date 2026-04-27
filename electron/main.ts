@@ -6,6 +6,14 @@ import os from 'node:os'
 import fs from 'node:fs'
 import { posLog } from './posLogger'
 import { describeWriteError, preflightCheck, type PrinterHealthResult } from './printerHealth'
+import {
+  discoverWindowsComPrinter,
+  getPrinterBaudRate,
+  isWindowsComPath,
+  normalizeComPath,
+  preflightComPath,
+  writeBytesToCom,
+} from './windowsSerialPrinter'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -42,7 +50,8 @@ let win: BrowserWindow | null
 //   STAFF_MACHINE_TYPE=normal         # use backend TCP printing (legacy)
 //   STAFF_MACHINE_TYPE=pos|unset     # local USB / render+ack (default for staff kiosks)
 //   STAFF_MACHINE_ID=<stable-id>     # default: os.hostname()
-//   STAFF_PRINTER_DEVICE=...         # default: /dev/usb/lp0 on Linux, else ""
+//   STAFF_PRINTER_DEVICE=...         # default: /dev/usb/lp0 on Linux; on Windows, auto-pick a COM port
+//   STAFF_PRINTER_BAUD=9600          # serial baud for COM (ZKTeco often 9600; try 115200 if needed)
 type MachineInfo = {
   machineType: 'pos' | 'normal'
   machineId: string
@@ -54,12 +63,16 @@ function defaultPrinterDevice(): string {
   return ''
 }
 
+/** Set during app startup on Windows when STAFF_PRINTER_DEVICE is not set. */
+let windowsAutoCom = ''
+
 function getMachineInfo(): MachineInfo {
   const rawType = String(process.env.STAFF_MACHINE_TYPE || '').toLowerCase().trim()
   // Default: POS (no env on the PC). Set STAFF_MACHINE_TYPE=normal for legacy Ethernet printing.
   const machineType: 'pos' | 'normal' = rawType === 'normal' ? 'normal' : 'pos'
   const machineId = String(process.env.STAFF_MACHINE_ID || '').trim() || os.hostname()
-  const printerDevice = String(process.env.STAFF_PRINTER_DEVICE || '').trim() || defaultPrinterDevice()
+  const envDevice = String(process.env.STAFF_PRINTER_DEVICE || '').trim()
+  const printerDevice = envDevice || (process.platform === 'win32' ? windowsAutoCom : '') || defaultPrinterDevice()
   return { machineType, machineId, printerDevice }
 }
 
@@ -87,6 +100,31 @@ const writeQueue: Map<string, Promise<unknown>> = new Map()
 async function writeRawToDevice(device: string, buffer: Buffer): Promise<number> {
   if (!device) {
     throw new Error('STAFF_PRINTER_DEVICE is not set and no platform default is available')
+  }
+  if (isWindowsComPath(device)) {
+    const com = normalizeComPath(device)
+    const baud = getPrinterBaudRate()
+    const previous = writeQueue.get(com) || Promise.resolve()
+    let release: (value: number) => void = () => {}
+    let fail: (err: Error) => void = () => {}
+    const next = new Promise<number>((resolve, reject) => {
+      release = resolve
+      fail = reject
+    })
+    writeQueue.set(com, next.catch(() => undefined))
+    try {
+      await previous
+      const n = await writeBytesToCom(com, buffer, baud)
+      release(n)
+      return n
+    } catch (e) {
+      fail(e as Error)
+      throw e
+    } finally {
+      if (writeQueue.get(com) === next.catch(() => undefined)) {
+        writeQueue.delete(com)
+      }
+    }
   }
   const previous = writeQueue.get(device) || Promise.resolve()
   let release: (value: number) => void = () => {}
@@ -122,6 +160,10 @@ let cachedHealth: PrinterHealthResult | null = null
 
 async function refreshPrinterHealth(): Promise<PrinterHealthResult> {
   const info = machineInfo()
+  if (process.platform === 'win32' && isWindowsComPath(info.printerDevice)) {
+    cachedHealth = await preflightComPath(info.printerDevice, getPrinterBaudRate())
+    return cachedHealth
+  }
   cachedHealth = await preflightCheck(info.printerDevice)
   return cachedHealth
 }
@@ -159,7 +201,10 @@ function registerWaslaIPC() {
         const info = machineInfo()
         const device = (payload.deviceOverride && payload.deviceOverride.trim()) || info.printerDevice
         if (!device) {
-          const error = 'no printer device configured (set STAFF_PRINTER_DEVICE, e.g. /dev/usb/lp0)'
+          const error =
+            process.platform === 'win32'
+              ? 'no printer COM port (install the ZKTeco USB driver, then restart the app, or set STAFF_PRINTER_DEVICE=COM3)'
+              : 'no printer device configured (set STAFF_PRINTER_DEVICE, e.g. /dev/usb/lp0)'
           posLog.error('usb-write', { jobId, ok: false, error, duration_ms: Date.now() - start })
           return { ok: false, error }
         }
@@ -178,7 +223,7 @@ function registerWaslaIPC() {
         const err = e as NodeJS.ErrnoException
         const info = machineInfo()
         const device = (payload?.deviceOverride && payload.deviceOverride.trim()) || info.printerDevice
-        const error = describeWriteError(err, device)
+        const error = isWindowsComPath(device) ? (err as Error).message || 'COM write failed' : describeWriteError(err, device)
         const duration = Date.now() - start
         posLog.error('usb-write', { jobId, ok: false, device, errno: err.code || 'UNKNOWN', error, duration_ms: duration })
         return { ok: false, error, errno: err.code, durationMs: duration }
@@ -240,6 +285,11 @@ app.on('activate', () => {
 app.whenReady().then(async () => {
   app.commandLine.appendSwitch('disable-web-security')
   app.commandLine.appendSwitch('disable-features', 'VizDisplayCompositor')
+
+  if (process.platform === 'win32' && !String(process.env.STAFF_PRINTER_DEVICE || '').trim()) {
+    windowsAutoCom = await discoverWindowsComPrinter()
+    cachedMachineInfo = null
+  }
 
   const info = machineInfo()
   posLog.info('boot', {

@@ -3,6 +3,10 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.wasla.choice",
   "asar": true,
+  "asarUnpack": [
+    "node_modules/serialport/**/*",
+    "node_modules/@serialport/**/*"
+  ],
   "productName": "Wasla Choice",
   "directories": {
     "output": "release/${version}"
