@@ -15,7 +15,7 @@ export default defineConfig({
           build: {
             rollupOptions: {
               // Native bindings; load from node_modules at runtime (see electron-builder asarUnpack).
-              external: ['serialport', /^@serialport\/.*/],
+              external: ['serialport', /^@serialport\/.*/, 'usb', 'escpos-usb'],
             },
           },
         },

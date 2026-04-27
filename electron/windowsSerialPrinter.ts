@@ -1,111 +1,195 @@
 // Windows-only: ZKTeco ZKP8003 and similar ESC/POS units usually enumerate as a
 // virtual COM port. We use `serialport` (baud + 8N1) instead of raw fs writes.
 
-import { posLog } from './posLogger'
-import type { PrinterHealthResult } from './printerHealth'
+import { posLog } from "./posLogger";
+import type { PrinterHealthResult } from "./printerHealth";
 
-type PortInfo = Awaited<ReturnType<typeof listPorts>>[number]
+type PortInfo = Awaited<ReturnType<typeof listPorts>>[number];
 
 async function listPorts() {
-  const { SerialPort } = await import('serialport')
-  return SerialPort.list()
+  const { SerialPort } = await import("serialport");
+  return SerialPort.list();
 }
 
 export function getPrinterBaudRate(): number {
-  const raw = String(process.env.STAFF_PRINTER_BAUD || '9600').trim()
-  const n = parseInt(raw, 10)
-  if (Number.isFinite(n) && n > 0) return n
-  return 9600
+  const raw = String(process.env.STAFF_PRINTER_BAUD || "9600").trim();
+  const n = parseInt(raw, 10);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 9600;
 }
 
 function norm(s: string | undefined | null): string {
-  return String(s || '')
+  return String(s || "")
     .toLowerCase()
-    .trim()
+    .trim();
 }
 
 /** True if `device` is a Windows COM port name we should open via serialport. */
 export function isWindowsComPath(device: string): boolean {
-  if (process.platform !== 'win32' || !device) return false
-  const d = device.replace(/\\\\/g, '\\')
-  if (/^\\\\\.\\COM\d+$/i.test(d)) return true
-  return /^COM\d+$/i.test(d.trim())
+  if (process.platform !== "win32" || !device) return false;
+  const d = device.replace(/\\\\/g, "\\");
+  if (/^\\\\\.\\COM\d+$/i.test(d)) return true;
+  return /^COM\d+$/i.test(d.trim());
 }
 
 /** Normalize to COMn for node-serialport. */
 export function normalizeComPath(device: string): string {
-  const m = device.replace(/\\\\/g, '\\').match(/(COM\d+)/i)
-  if (m) return m[1]!.toUpperCase()
-  return device.trim()
+  const m = device.replace(/\\\\/g, "\\").match(/(COM\d+)/i);
+  if (m) return m[1]!.toUpperCase();
+  return device.trim();
 }
 
 export async function listWindowsComPaths(): Promise<string[]> {
-  if (process.platform !== 'win32') return []
+  if (process.platform !== "win32") return [];
   try {
-    const ports = await listPorts()
+    const ports = await listPorts();
     return ports
-      .map((p) => normalizeComPath(p.path || ''))
-      .filter((p) => /^COM\d+$/i.test(p))
+      .map((p) => normalizeComPath(p.path || ""))
+      .filter((p) => /^COM\d+$/i.test(p));
   } catch {
-    return []
+    return [];
   }
 }
 
 export async function isComPathPresent(device: string): Promise<boolean> {
-  if (process.platform !== 'win32') return false
-  const com = normalizeComPath(device)
-  if (!/^COM\d+$/i.test(com)) return false
-  const paths = await listWindowsComPaths()
-  return paths.includes(com)
+  if (process.platform !== "win32") return false;
+  const com = normalizeComPath(device);
+  if (!/^COM\d+$/i.test(com)) return false;
+  const paths = await listWindowsComPaths();
+  return paths.includes(com);
 }
 
+/**
+ * Minimum score for the port to be considered a thermal printer.
+ *
+ * A generic USB-serial adapter (e.g. an Arduino, a USB-to-RS232 dongle) scores
+ * around 21 (20 for "USB Serial" + 1 for having a path).  A CH340/CH341-based
+ * thermal printer scores ≥31 (30 for the chip match + 1 for path).
+ *
+ * Setting the bar at 30 means we *only* accept ports that:
+ *   - explicitly mention CH340, CH341, or WCH in their descriptor, OR
+ *   - mention a thermal-printer keyword like ZKTeco/ZKP, OR
+ *   - mention a known USB-serial bridge chip *and* also look like a printer
+ *
+ * Without this threshold, the auto-detect would happily pick up a random
+ * Bluetooth COM port or USB-serial cable and report it as "printer ready"
+ * even when the ZKP8003 is completely disconnected.
+ */
+const MIN_THERMAL_PRINTER_SCORE = 30;
+
 function scorePort(p: PortInfo): number {
-  const hay = [norm(p.manufacturer), norm(p.friendlyName), norm(p.pnpId), norm(p.path)].join(' ')
-  let s = 0
-  if (hay.includes('zkteco') || hay.includes('zkt ')) s += 100
-  if (hay.includes('zkp') || hay.includes('thermal')) s += 40
-  if (hay.includes('wch') || hay.includes('ch340') || hay.includes('ch341')) s += 30
-  if (hay.includes('prolific') || hay.includes('pl2303')) s += 25
-  if (hay.includes('ftdi') || hay.includes('ft232')) s += 25
-  if (hay.includes('silicon labs') || hay.includes('cp210')) s += 25
-  if (hay.includes('usb') && (hay.includes('serial') || hay.includes('com'))) s += 20
-  if (p.path) s += 1
-  return s
+  const hay = [
+    norm(p.manufacturer),
+    norm(p.friendlyName),
+    norm(p.pnpId),
+    norm(p.path),
+  ].join(" ");
+  let s = 0;
+
+  // ZKTeco / ZKP — direct match for the ZKP8003
+  if (hay.includes("zkteco") || hay.includes("zkt ")) s += 100;
+  if (hay.includes("zkp") || hay.includes("zkp8003")) s += 80;
+  if (hay.includes("thermal") || hay.includes("receipt") || hay.includes("pos"))
+    s += 50;
+
+  // CH340/CH341 — the USB-serial chip inside the ZKP8003
+  if (hay.includes("wch") || hay.includes("ch340") || hay.includes("ch341"))
+    s += 30;
+
+  // Other known USB-serial chips (lower score — generic)
+  if (hay.includes("prolific") || hay.includes("pl2303")) s += 15;
+  if (hay.includes("ftdi") || hay.includes("ft232")) s += 15;
+  if (hay.includes("silicon labs") || hay.includes("cp210")) s += 15;
+
+  // Generic "USB Serial" fallback (lowest)
+  if (hay.includes("usb") && (hay.includes("serial") || hay.includes("com")))
+    s += 5;
+
+  // Tie-breaker: prefer paths that exist
+  if (p.path) s += 1;
+
+  return s;
 }
 
 /**
  * Picks a likely USB–serial COM port for ESC/POS when STAFF_PRINTER_DEVICE is unset.
+ *
+ * Returns an empty string when no port scores above `MIN_THERMAL_PRINTER_SCORE`,
+ * so the caller can distinguish "no thermal printer detected" from "printer on COM3".
  */
 export async function discoverWindowsComPrinter(): Promise<string> {
-  if (process.platform !== 'win32') return ''
+  if (process.platform !== "win32") return "";
   try {
-    const ports = await listPorts()
+    const ports = await listPorts();
     if (ports.length === 0) {
-      posLog.warn('win-serial', { event: 'discover', found: 0, message: 'no serial ports' })
-      return ''
+      posLog.warn("win-serial", {
+        event: "discover",
+        found: 0,
+        message: "no serial ports",
+      });
+      return "";
     }
     const ranked = ports
       .map((p) => ({ p, s: scorePort(p) }))
-      .sort((a, b) => b.s - a.s)
-    const best = ranked[0]!
-    const path = normalizeComPath(best.p.path || '')
+      .sort((a, b) => b.s - a.s);
+    const best = ranked[0]!;
+
+    // ── Strict threshold ──────────────────────────────────────────────
+    // If the best port scores below MIN_THERMAL_PRINTER_SCORE, none of the
+    // ports on this machine are likely to be a thermal printer.  We return
+    // empty so the health check reports "missing" instead of "ok".
+    if (best.s < MIN_THERMAL_PRINTER_SCORE) {
+      const candidatesSummary = ports
+        .map(
+          (x) =>
+            `${x.path}(${scorePort(x)}:${String(x.manufacturer || "").slice(0, 24)})`,
+        )
+        .join("; ");
+      posLog.warn("win-serial", {
+        event: "discover-skipped",
+        best: `${normalizeComPath(best.p.path || "")} (score ${best.s})`,
+        min_threshold: MIN_THERMAL_PRINTER_SCORE,
+        candidates: candidatesSummary,
+        message: "no COM port looks like a thermal printer",
+      });
+      return "";
+    }
+
+    const path = normalizeComPath(best.p.path || "");
     const candidatesSummary = ports
-      .map((x) => `${x.path}(${scorePort(x)}:${String(x.manufacturer || '').slice(0, 24)})`)
-      .join('; ')
-    posLog.info('win-serial', { event: 'discover', picked: path, score: best.s, candidates: candidatesSummary })
-    return path
+      .map(
+        (x) =>
+          `${x.path}(${scorePort(x)}:${String(x.manufacturer || "").slice(0, 24)})`,
+      )
+      .join("; ");
+    posLog.info("win-serial", {
+      event: "discover",
+      picked: path,
+      score: best.s,
+      candidates: candidatesSummary,
+    });
+    return path;
   } catch (e) {
-    posLog.error('win-serial', { event: 'discover-error', error: (e as Error).message })
-    return ''
+    posLog.error("win-serial", {
+      event: "discover-error",
+      error: (e as Error).message,
+    });
+    return "";
   }
 }
 
-export async function writeBytesToCom(path: string, buffer: Buffer, baudRate: number): Promise<number> {
-  const { SerialPort } = await import('serialport')
-  const com = normalizeComPath(path)
-  const present = await isComPathPresent(com)
+export async function writeBytesToCom(
+  path: string,
+  buffer: Buffer,
+  baudRate: number,
+): Promise<number> {
+  const { SerialPort } = await import("serialport");
+  const com = normalizeComPath(path);
+  const present = await isComPathPresent(com);
   if (!present) {
-    throw new Error(`${com} is not present (device disconnected or driver not loaded)`)
+    throw new Error(
+      `${com} is not present (device disconnected or driver not loaded)`,
+    );
   }
   return new Promise((resolve, reject) => {
     const port = new SerialPort({
@@ -113,94 +197,115 @@ export async function writeBytesToCom(path: string, buffer: Buffer, baudRate: nu
       baudRate,
       dataBits: 8,
       stopBits: 1,
-      parity: 'none',
+      parity: "none",
       autoOpen: false,
-    })
+    });
     const finish = (err?: Error) => {
       try {
-        port.removeAllListeners()
+        port.removeAllListeners();
       } catch {
         // ignore
       }
       if (port.isOpen) {
         port.close((cErr) => {
-          if (err) reject(err)
-          else if (cErr) reject(cErr)
-          else resolve(buffer.length)
-        })
-      } else if (err) reject(err)
-      else resolve(buffer.length)
-    }
-    port.once('error', (e: Error) => finish(e))
+          if (err) reject(err);
+          else if (cErr) reject(cErr);
+          else resolve(buffer.length);
+        });
+      } else if (err) reject(err);
+      else resolve(buffer.length);
+    };
+    port.once("error", (e: Error) => finish(e));
     port.open((openErr) => {
-      if (openErr) return finish(openErr)
+      if (openErr) return finish(openErr);
       port.write(buffer, (wErr) => {
-        if (wErr) return finish(wErr)
+        if (wErr) return finish(wErr);
         port.drain((dErr) => {
-          if (dErr) return finish(dErr)
-          return finish()
-        })
-      })
-    })
-  })
+          if (dErr) return finish(dErr);
+          return finish();
+        });
+      });
+    });
+  });
 }
 
-export async function preflightComPath(device: string, baudRate: number): Promise<PrinterHealthResult> {
-  const start = Date.now()
-  const com = normalizeComPath(device)
+export async function preflightComPath(
+  device: string,
+  baudRate: number,
+): Promise<PrinterHealthResult> {
+  const start = Date.now();
+  const com = normalizeComPath(device);
   if (!isWindowsComPath(com)) {
     return {
       device,
-      status: 'unknown-error',
-      error: 'not a Windows COM path',
+      status: "unknown-error",
+      error: "not a Windows COM path",
       durationMs: Date.now() - start,
-    }
+    };
   }
-  const present = await isComPathPresent(com)
+  const present = await isComPathPresent(com);
   if (!present) {
     const result: PrinterHealthResult = {
       device: com,
-      status: 'missing',
+      status: "missing",
       error: `${com} is not present (device disconnected or driver not loaded)`,
       durationMs: Date.now() - start,
-    }
-    posLog.warn('win-serial-preflight', { path: com, status: 'missing', error: result.error, duration_ms: result.durationMs })
-    return result
+    };
+    posLog.warn("win-serial-preflight", {
+      path: com,
+      status: "missing",
+      error: result.error,
+      duration_ms: result.durationMs,
+    });
+    return result;
   }
   try {
-    const { SerialPort } = await import('serialport')
+    const { SerialPort } = await import("serialport");
     await new Promise<void>((resolve, reject) => {
       const port = new SerialPort({
         path: com,
         baudRate,
         dataBits: 8,
         stopBits: 1,
-        parity: 'none',
+        parity: "none",
         autoOpen: false,
-      })
+      });
       port.open((openErr) => {
         if (openErr) {
-          reject(openErr)
-          return
+          reject(openErr);
+          return;
         }
         port.close((closeErr) => {
-          if (closeErr) reject(closeErr)
-          else resolve()
-        })
-      })
-    })
-    const result: PrinterHealthResult = { device: com, status: 'ok', durationMs: Date.now() - start }
-    posLog.info('win-serial-preflight', { path: com, status: 'ok', duration_ms: result.durationMs })
-    return result
-  } catch (e) {
-    const err = e as Error
+          if (closeErr) reject(closeErr);
+          else resolve();
+        });
+      });
+    });
     const result: PrinterHealthResult = {
       device: com,
-      status: 'unknown-error',
-      error: err.message || 'failed to open COM port',
+      status: "ok",
       durationMs: Date.now() - start,
-    }
-    posLog.warn('win-serial-preflight', { path: com, status: 'error', error: result.error, duration_ms: result.durationMs })
-    return result
+    };
+    posLog.info("win-serial-preflight", {
+      path: com,
+      status: "ok",
+      duration_ms: result.durationMs,
+    });
+    return result;
+  } catch (e) {
+    const err = e as Error;
+    const result: PrinterHealthResult = {
+      device: com,
+      status: "unknown-error",
+      error: err.message || "failed to open COM port",
+      durationMs: Date.now() - start,
+    };
+    posLog.warn("win-serial-preflight", {
+      path: com,
+      status: "error",
+      error: result.error,
+      duration_ms: result.durationMs,
+    });
+    return result;
   }
 }

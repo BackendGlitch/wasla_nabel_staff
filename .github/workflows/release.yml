@@ -27,6 +27,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # electron-updater fetches `latest.yml` and SHA512 from the release; the
+      # installer alone is not enough. Include blockmap for delta updates.
       - name: Release (Setup + latest.yml + blockmap)
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')

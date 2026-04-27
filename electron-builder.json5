@@ -5,7 +5,10 @@
   "asar": true,
   "asarUnpack": [
     "node_modules/serialport/**/*",
-    "node_modules/@serialport/**/*"
+    "node_modules/@serialport/**/*",
+    "node_modules/usb/**/*",
+    "node_modules/escpos-usb/**/*",
+    "node_modules/escpos/**/*"
   ],
   "productName": "Wasla Choice",
   "directories": {
@@ -19,6 +22,9 @@
   "win": {
     "icon": "public/icons/icon-256x256.png",
     "publisherName": ["STE Dhraiff Services Transport"],
+    // On Linux, turning this off avoids Wine during cross-builds (rcedit / stub signing).
+    // Release installers are built on windows-latest in GitHub Actions, where this can stay off or be re-enabled.
+    "signAndEditExecutable": false,
     "target": [
       {
         "target": "nsis",

@@ -15,6 +15,12 @@ import {
   preflightComPath,
   writeBytesToCom,
 } from './windowsSerialPrinter'
+import {
+  isWinusbDeviceId,
+  parseWinusbId,
+  preflightWinusb,
+  writeBytesWinusb,
+} from './windowsWinusbPrinter'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -51,7 +57,7 @@ let win: BrowserWindow | null
 //   STAFF_MACHINE_TYPE=normal         # use backend TCP printing (legacy)
 //   STAFF_MACHINE_TYPE=pos|unset     # local USB / render+ack (default for staff kiosks)
 //   STAFF_MACHINE_ID=<stable-id>     # default: os.hostname()
-//   STAFF_PRINTER_DEVICE=...         # default: /dev/usb/lp0 on Linux; on Windows, auto-pick a COM port
+//   STAFF_PRINTER_DEVICE=...         # Linux: /dev/usb/lp0 | Windows COM: COM3 | WinUSB (Zadig): winusb:0x0483:0x5743
 //   STAFF_PRINTER_BAUD=9600          # serial baud for COM (ZKTeco often 9600; try 115200 if needed)
 type MachineInfo = {
   machineType: 'pos' | 'normal'
@@ -101,6 +107,36 @@ const writeQueue: Map<string, Promise<unknown>> = new Map()
 async function writeRawToDevice(device: string, buffer: Buffer): Promise<number> {
   if (!device) {
     throw new Error('STAFF_PRINTER_DEVICE is not set and no platform default is available')
+  }
+  if (process.platform === 'win32' && isWinusbDeviceId(device)) {
+    const ids = parseWinusbId(device)
+    if (!ids) {
+      throw new Error('Invalid WinUSB id (use e.g. STAFF_PRINTER_DEVICE=winusb:0x0483:0x5743)')
+    }
+    const { vid, pid } = ids
+    const key = `winusb:${vid}:${pid}`
+    const previous = writeQueue.get(key) || Promise.resolve()
+    let release: (value: number) => void = () => {}
+    let fail: (err: Error) => void = () => {}
+    const next = new Promise<number>((resolve, reject) => {
+      release = resolve
+      fail = reject
+    })
+    const tail = next.catch(() => undefined)
+    writeQueue.set(key, tail)
+    try {
+      await previous
+      const n = await writeBytesWinusb(device, vid, pid, buffer)
+      release(n)
+      return n
+    } catch (e) {
+      fail(e as Error)
+      throw e
+    } finally {
+      if (writeQueue.get(key) === tail) {
+        writeQueue.delete(key)
+      }
+    }
   }
   if (isWindowsComPath(device)) {
     const com = normalizeComPath(device)
@@ -169,6 +205,20 @@ async function refreshPrinterHealth(): Promise<PrinterHealthResult> {
     cachedMachineInfo = null
   }
   const info = machineInfo()
+  if (process.platform === 'win32' && isWinusbDeviceId(info.printerDevice)) {
+    const ids = parseWinusbId(info.printerDevice)
+    if (!ids) {
+      cachedHealth = {
+        device: info.printerDevice,
+        status: 'unknown-error',
+        error: 'Invalid winusb:VID:PID (example: winusb:0x0483:0x5743)',
+        durationMs: 0,
+      }
+      return cachedHealth
+    }
+    cachedHealth = await preflightWinusb(info.printerDevice, ids.vid, ids.pid)
+    return cachedHealth
+  }
   if (process.platform === 'win32' && isWindowsComPath(info.printerDevice)) {
     cachedHealth = await preflightComPath(info.printerDevice, getPrinterBaudRate())
     return cachedHealth
@@ -212,7 +262,7 @@ function registerWaslaIPC() {
         if (!device) {
           const error =
             process.platform === 'win32'
-              ? 'no printer COM port (install the ZKTeco USB driver, then restart the app, or set STAFF_PRINTER_DEVICE=COM3)'
+              ? 'no printer device (set STAFF_PRINTER_DEVICE=COM3 or winusb:0x0483:0x5743 with Zadig WinUSB)'
               : 'no printer device configured (set STAFF_PRINTER_DEVICE, e.g. /dev/usb/lp0)'
           posLog.error('usb-write', { jobId, ok: false, error, duration_ms: Date.now() - start })
           return { ok: false, error }
@@ -248,7 +298,9 @@ function registerWaslaIPC() {
         const err = e as NodeJS.ErrnoException
         const info = machineInfo()
         const device = (payload?.deviceOverride && payload.deviceOverride.trim()) || info.printerDevice
-        const error = isWindowsComPath(device) ? (err as Error).message || 'COM write failed' : describeWriteError(err, device)
+        const error = isWinusbDeviceId(device) || isWindowsComPath(device)
+          ? (err as Error).message || 'USB write failed'
+          : describeWriteError(err, device)
         const duration = Date.now() - start
         posLog.error('usb-write', { jobId, ok: false, device, errno: err.code || 'UNKNOWN', error, duration_ms: duration })
         return { ok: false, error, errno: err.code, durationMs: duration }
@@ -386,7 +438,11 @@ function setupAutoUpdater() {
   try {
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
+    // GitHub Actions builds are not Authenticode-signed; the embedded app-update.yml
+    // still contains publisherName, so verification would block every update. Skip
+    // until you ship signed installers (then remove this and keep publisherName).
     if (process.platform === 'win32') {
+      // NsisUpdater (Windows) supports this; default AppUpdater typings omit it
       const nsis = autoUpdater as typeof autoUpdater & {
         verifyUpdateCodeSignature: (fn: (publisherNames: string[], file: string) => Promise<string | null>) => void
       }
@@ -394,11 +450,11 @@ function setupAutoUpdater() {
     }
 
     setInterval(() => {
-      autoUpdater.checkForUpdates().catch((err) => console.error('check updates:', err))
+      autoUpdater.checkForUpdates().catch((err) => console.error('Error checking for updates:', err))
     }, 4 * 60 * 60 * 1000)
 
     setTimeout(() => {
-      autoUpdater.checkForUpdates().catch((err) => console.error('check updates startup:', err))
+      autoUpdater.checkForUpdates().catch((err) => console.error('Error checking for updates on startup:', err))
     }, 2000)
 
     autoUpdater.on('update-available', (info) => {
@@ -445,6 +501,7 @@ function setupAutoUpdater() {
     })
     ipcMain.handle('install-update', async () => {
       try {
+        // NSIS: silent install (/S) is required for a reliable headless update flow.
         autoUpdater.quitAndInstall(true, true)
         return { success: true }
       } catch (error) {
