@@ -9,6 +9,7 @@ import { describeWriteError, preflightCheck, type PrinterHealthResult } from './
 import {
   discoverWindowsComPrinter,
   getPrinterBaudRate,
+  isComPathPresent,
   isWindowsComPath,
   normalizeComPath,
   preflightComPath,
@@ -111,7 +112,8 @@ async function writeRawToDevice(device: string, buffer: Buffer): Promise<number>
       release = resolve
       fail = reject
     })
-    writeQueue.set(com, next.catch(() => undefined))
+    const tail = next.catch(() => undefined)
+    writeQueue.set(com, tail)
     try {
       await previous
       const n = await writeBytesToCom(com, buffer, baud)
@@ -121,7 +123,7 @@ async function writeRawToDevice(device: string, buffer: Buffer): Promise<number>
       fail(e as Error)
       throw e
     } finally {
-      if (writeQueue.get(com) === next.catch(() => undefined)) {
+      if (writeQueue.get(com) === tail) {
         writeQueue.delete(com)
       }
     }
@@ -133,7 +135,8 @@ async function writeRawToDevice(device: string, buffer: Buffer): Promise<number>
     release = resolve
     fail = reject
   })
-  writeQueue.set(device, next.catch(() => undefined))
+  const tail = next.catch(() => undefined)
+  writeQueue.set(device, tail)
   try {
     await previous
     const handle = await fs.promises.open(device, 'a')
@@ -150,7 +153,7 @@ async function writeRawToDevice(device: string, buffer: Buffer): Promise<number>
   } finally {
     // If our promise is still the head of the queue, drop the reference so
     // GC can collect the chain when the burst is fully drained.
-    if (writeQueue.get(device) === next.catch(() => undefined)) {
+    if (writeQueue.get(device) === tail) {
       writeQueue.delete(device)
     }
   }
@@ -159,6 +162,12 @@ async function writeRawToDevice(device: string, buffer: Buffer): Promise<number>
 let cachedHealth: PrinterHealthResult | null = null
 
 async function refreshPrinterHealth(): Promise<PrinterHealthResult> {
+  // On Windows with auto-detect mode, refresh COM choice on every health poll
+  // so unplug/replug events are reflected quickly in the UI.
+  if (process.platform === 'win32' && !String(process.env.STAFF_PRINTER_DEVICE || '').trim()) {
+    windowsAutoCom = await discoverWindowsComPrinter()
+    cachedMachineInfo = null
+  }
   const info = machineInfo()
   if (process.platform === 'win32' && isWindowsComPath(info.printerDevice)) {
     cachedHealth = await preflightComPath(info.printerDevice, getPrinterBaudRate())
@@ -199,7 +208,7 @@ function registerWaslaIPC() {
           return { ok: false, error: 'contentBase64 is required' }
         }
         const info = machineInfo()
-        const device = (payload.deviceOverride && payload.deviceOverride.trim()) || info.printerDevice
+        let device = (payload.deviceOverride && payload.deviceOverride.trim()) || info.printerDevice
         if (!device) {
           const error =
             process.platform === 'win32'
@@ -207,6 +216,22 @@ function registerWaslaIPC() {
               : 'no printer device configured (set STAFF_PRINTER_DEVICE, e.g. /dev/usb/lp0)'
           posLog.error('usb-write', { jobId, ok: false, error, duration_ms: Date.now() - start })
           return { ok: false, error }
+        }
+        if (isWindowsComPath(device)) {
+          const present = await isComPathPresent(device)
+          if (!present) {
+            if (!String(process.env.STAFF_PRINTER_DEVICE || '').trim()) {
+              windowsAutoCom = await discoverWindowsComPrinter()
+              cachedMachineInfo = null
+            }
+            const refreshed = machineInfo().printerDevice
+            if (!refreshed || !(await isComPathPresent(refreshed))) {
+              const error = `${normalizeComPath(device)} is not present (printer disconnected or COM changed)`
+              posLog.error('usb-write', { jobId, ok: false, device, error, duration_ms: Date.now() - start })
+              return { ok: false, error }
+            }
+            device = refreshed
+          }
         }
         const buffer = Buffer.from(payload.contentBase64, 'base64')
         if (buffer.length === 0) {

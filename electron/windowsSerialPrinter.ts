@@ -39,6 +39,26 @@ export function normalizeComPath(device: string): string {
   return device.trim()
 }
 
+export async function listWindowsComPaths(): Promise<string[]> {
+  if (process.platform !== 'win32') return []
+  try {
+    const ports = await listPorts()
+    return ports
+      .map((p) => normalizeComPath(p.path || ''))
+      .filter((p) => /^COM\d+$/i.test(p))
+  } catch {
+    return []
+  }
+}
+
+export async function isComPathPresent(device: string): Promise<boolean> {
+  if (process.platform !== 'win32') return false
+  const com = normalizeComPath(device)
+  if (!/^COM\d+$/i.test(com)) return false
+  const paths = await listWindowsComPaths()
+  return paths.includes(com)
+}
+
 function scorePort(p: PortInfo): number {
   const hay = [norm(p.manufacturer), norm(p.friendlyName), norm(p.pnpId), norm(p.path)].join(' ')
   let s = 0
@@ -83,6 +103,10 @@ export async function discoverWindowsComPrinter(): Promise<string> {
 export async function writeBytesToCom(path: string, buffer: Buffer, baudRate: number): Promise<number> {
   const { SerialPort } = await import('serialport')
   const com = normalizeComPath(path)
+  const present = await isComPathPresent(com)
+  if (!present) {
+    throw new Error(`${com} is not present (device disconnected or driver not loaded)`)
+  }
   return new Promise((resolve, reject) => {
     const port = new SerialPort({
       path: com,
@@ -131,6 +155,17 @@ export async function preflightComPath(device: string, baudRate: number): Promis
       error: 'not a Windows COM path',
       durationMs: Date.now() - start,
     }
+  }
+  const present = await isComPathPresent(com)
+  if (!present) {
+    const result: PrinterHealthResult = {
+      device: com,
+      status: 'missing',
+      error: `${com} is not present (device disconnected or driver not loaded)`,
+      durationMs: Date.now() - start,
+    }
+    posLog.warn('win-serial-preflight', { path: com, status: 'missing', error: result.error, duration_ms: result.durationMs })
+    return result
   }
   try {
     const { SerialPort } = await import('serialport')
