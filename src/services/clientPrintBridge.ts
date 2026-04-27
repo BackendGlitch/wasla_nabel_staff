@@ -9,9 +9,9 @@
 // /ack ok=false and then re-thrown so the caller (printerService) can decide
 // what to do (retry, surface to user, etc.).
 //
-// IMPORTANT: this module is only used when STAFF_MACHINE_TYPE=pos AND
-// window.wasla is available. The router in printerService.routeTicket()
-// guards both conditions; this module assumes them.
+// IMPORTANT: this module is only used in POS mode (default in the staff app) AND
+// window.wasla is available. The router in printerService.routeTicket() guards
+// both; this module assumes them.
 
 import { ensureMachineInfo, machineHeaders } from './machineMode'
 import { posLog, nowMs } from './posLogger'

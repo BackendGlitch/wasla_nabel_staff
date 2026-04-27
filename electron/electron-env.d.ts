@@ -19,7 +19,7 @@ declare namespace NodeJS {
     /** /dist/ or /public/ */
     VITE_PUBLIC: string
 
-    /** Staff machine class. "pos" enables USB rendering; otherwise "normal". */
+    /** `normal` = legacy backend TCP print. Omitted or `pos` = local USB (default in staff build). */
     STAFF_MACHINE_TYPE?: string
     /** Stable per-machine identifier. Defaults to os.hostname(). */
     STAFF_MACHINE_ID?: string

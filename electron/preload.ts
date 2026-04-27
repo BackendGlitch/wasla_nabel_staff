@@ -46,7 +46,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 //   getMachineInfo() : machineType ("pos"|"normal"), machineId, printerDevice
 //   printRawBytes()  : write base64 ESC/POS bytes to the configured device
 //
-// Both are no-ops for management installs (STAFF_MACHINE_TYPE=normal / unset).
+// Non-staff / legacy: set STAFF_MACHINE_TYPE=normal in the environment. Staff kiosk
+// build defaults to POS in main when unset.
 contextBridge.exposeInMainWorld('wasla', {
   getMachineInfo: () => ipcRenderer.invoke('wasla:get-machine-info'),
   printRawBytes: (payload: { contentBase64: string; deviceOverride?: string; jobId?: string }) =>

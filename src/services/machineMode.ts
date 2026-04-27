@@ -3,26 +3,34 @@
 //
 // Goals:
 //   * Single source of truth for machineType/machineId across the app.
-//   * Cached once; the underlying values are env-driven and don't change at
-//     runtime, so a single IPC roundtrip is enough.
-//   * Safe in non-Electron contexts (browser dev) — falls back to "normal".
+//   * Cached once; the underlying values are env-driven in main and do not
+//     change at runtime, so a single IPC roundtrip is enough.
+//   * In Electron, default machine type is POS (main) — provisional reads
+//     match that before the IPC result arrives.
 //   * Synchronous accessor for hot paths (HTTP header injection); async
 //     ensure() for code paths that can await initialisation explicitly.
 
 import type { WaslaMachineInfo, WaslaMachineType } from '../types/electron'
 
-const FALLBACK: WaslaMachineInfo = {
+const BROWSER_FALLBACK: WaslaMachineInfo = {
   machineType: 'normal',
   machineId: '',
   printerDevice: '',
 }
 
-let cached: WaslaMachineInfo | null = null
-let inflight: Promise<WaslaMachineInfo> | null = null
-
 function isElectronWaslaAvailable(): boolean {
   return typeof window !== 'undefined' && !!window.wasla
 }
+
+function provisionalInfo(): WaslaMachineInfo {
+  if (isElectronWaslaAvailable()) {
+    return { machineType: 'pos', machineId: '', printerDevice: '' }
+  }
+  return BROWSER_FALLBACK
+}
+
+let cached: WaslaMachineInfo | null = null
+let inflight: Promise<WaslaMachineInfo> | null = null
 
 // ensureMachineInfo() resolves the machine info, caching the result. Called
 // once at app boot (best effort) so subsequent sync reads are instant.
@@ -30,7 +38,7 @@ export async function ensureMachineInfo(): Promise<WaslaMachineInfo> {
   if (cached) return cached
   if (inflight) return inflight
   if (!isElectronWaslaAvailable()) {
-    cached = FALLBACK
+    cached = BROWSER_FALLBACK
     return cached
   }
   inflight = (async () => {
@@ -44,7 +52,7 @@ export async function ensureMachineInfo(): Promise<WaslaMachineInfo> {
       cached = normalized
       return normalized
     } catch {
-      cached = FALLBACK
+      cached = provisionalInfo()
       return cached
     } finally {
       inflight = null
@@ -54,14 +62,13 @@ export async function ensureMachineInfo(): Promise<WaslaMachineInfo> {
 }
 
 // Synchronous accessor for hot paths (e.g. fetch header injection). If the
-// info hasn't been cached yet we fire-and-forget an ensure() and return the
-// safe fallback ("normal", no IDs). The very first request after boot may
-// therefore omit the headers — that is acceptable because the backend default
-// is also "normal" and headers are only metadata.
+// info is not yet cached, returns a provisional value (POS in Electron with
+// wasla, otherwise normal) and ensureMachineInfo is kicked off in the
+// background from App.
 export function getMachineInfoSync(): WaslaMachineInfo {
   if (cached) return cached
   void ensureMachineInfo()
-  return FALLBACK
+  return provisionalInfo()
 }
 
 export function getMachineType(): WaslaMachineType {

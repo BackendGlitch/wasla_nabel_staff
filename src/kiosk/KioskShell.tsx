@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { logout as apiLogout, setOnAuthLogout } from '@/api/client';
 import { useStation } from '@/contexts/StationContext';
 import { useCompanyLogoUrl, useCompanyName, useStationName } from '@/contexts/InitContext';
-import { getMachineInfoSync, isPosMode } from '@/services/machineMode';
+import { ensureMachineInfo, getMachineInfoSync, isPosMode } from '@/services/machineMode';
 import { printerService } from '@/services/printerService';
+import type { WaslaMachineInfo } from '@/types/electron';
 
 import { useNotifications } from './state/useNotifications';
 import { useKioskNav } from './state/useKioskNav';
@@ -49,8 +50,17 @@ export function KioskShell() {
   const workflow = usePosWorkflow({ station, showNotification });
   const nav = useKioskNav();
 
-  const machineInfo = useMemo(() => getMachineInfoSync(), []);
-  const posMode = useMemo(() => isPosMode(), []);
+  const [machineInfo, setMachineInfo] = useState<WaslaMachineInfo>(() => getMachineInfoSync());
+  const [posMode, setPosMode] = useState(() => isPosMode());
+
+  useEffect(() => {
+    setMachineInfo(getMachineInfoSync());
+    setPosMode(isPosMode());
+    void ensureMachineInfo().then(() => {
+      setMachineInfo(getMachineInfoSync());
+      setPosMode(isPosMode());
+    });
+  }, []);
 
   // Push company branding to the printer service exactly like the legacy
   // MainPage does — keeps printed talons consistent regardless of which UI

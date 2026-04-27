@@ -262,11 +262,11 @@ export class PrinterService {
   // existing UI code (waitForPrintJob, offline queue, etc.) keeps working.
   //
   // POS mode is only chosen when *both* are true:
-  //   * isPosMode() — STAFF_MACHINE_TYPE=pos AND window.wasla is exposed
+  //   * isPosMode() — not STAFF_MACHINE_TYPE=normal, window.wasla is exposed
   //   * a valid render typeKey is provided
   //
-  // Anything else falls through to the legacy /print/* path, so management
-  // installs and browser dev mode behave exactly as before.
+  // Otherwise falls back to legacy /print/* (e.g. STAFF_MACHINE_TYPE=normal or
+  // browser / management profile).
   private async routeTicket(
     ticketName: string,
     typeKey: 'booking' | 'entry' | 'exit' | 'daypass' | 'exitpass' | 'talon',

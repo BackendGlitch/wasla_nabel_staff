@@ -37,16 +37,12 @@ let win: BrowserWindow | null
 // uses them to decide whether to render+ack via USB (POS) or fall through
 // to the legacy backend_tcp /print endpoints (normal).
 //
-// All values are environment-driven so a single binary can run on either
-// machine class without code changes:
+// Values can be overridden by env so one binary can still run in legacy mode:
 //
-//   STAFF_MACHINE_TYPE=pos|normal     # default: normal (safe for existing installs)
-//   STAFF_MACHINE_ID=<stable-id>      # default: os.hostname()
-//   STAFF_PRINTER_DEVICE=/dev/usb/lp0 # default: linux /dev/usb/lp0, "" elsewhere
-//
-// IMPORTANT: when STAFF_MACHINE_TYPE is missing or unrecognised we default to
-// "normal" so existing deployments keep using the Ethernet flow exactly as
-// before. The new POS path only activates when explicitly opted in.
+//   STAFF_MACHINE_TYPE=normal         # use backend TCP printing (legacy)
+//   STAFF_MACHINE_TYPE=pos|unset     # local USB / render+ack (default for staff kiosks)
+//   STAFF_MACHINE_ID=<stable-id>     # default: os.hostname()
+//   STAFF_PRINTER_DEVICE=...         # default: /dev/usb/lp0 on Linux, else ""
 type MachineInfo = {
   machineType: 'pos' | 'normal'
   machineId: string
@@ -60,7 +56,8 @@ function defaultPrinterDevice(): string {
 
 function getMachineInfo(): MachineInfo {
   const rawType = String(process.env.STAFF_MACHINE_TYPE || '').toLowerCase().trim()
-  const machineType: 'pos' | 'normal' = rawType === 'pos' ? 'pos' : 'normal'
+  // Default: POS (no env on the PC). Set STAFF_MACHINE_TYPE=normal for legacy Ethernet printing.
+  const machineType: 'pos' | 'normal' = rawType === 'normal' ? 'normal' : 'pos'
   const machineId = String(process.env.STAFF_MACHINE_ID || '').trim() || os.hostname()
   const printerDevice = String(process.env.STAFF_PRINTER_DEVICE || '').trim() || defaultPrinterDevice()
   return { machineType, machineId, printerDevice }
