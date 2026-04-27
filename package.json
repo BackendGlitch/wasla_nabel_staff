@@ -2,6 +2,11 @@
   "name": "wasla-nabel-staff",
   "private": true,
   "version": "1.18.0",
+  "description": "Wasla Staff Desktop Application",
+  "author": {
+    "name": "STE Dhraiff Services Transport",
+    "email": "info@wasla.tn"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

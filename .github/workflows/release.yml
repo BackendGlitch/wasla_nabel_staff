@@ -83,7 +83,7 @@ jobs:
           name: staff-release-linux
           path: artifacts/lin
 
-      - name: Release (installers, AppImage, deb, auto-update metadata)
+      - name: Release (installers, deb, auto-update metadata)
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -93,7 +93,6 @@ jobs:
             artifacts/lin/**/latest-linux.yml
             artifacts/win/**/*-Setup.exe
             artifacts/win/**/*.blockmap
-            artifacts/lin/**/*.AppImage
             artifacts/lin/**/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
