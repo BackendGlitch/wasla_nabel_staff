@@ -21,6 +21,7 @@ import {
   preflightWinusb,
   writeBytesWinusb,
 } from './windowsWinusbPrinter'
+import { discoverLinuxUsblp } from './linuxUsblpPrinter'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -57,7 +58,7 @@ let win: BrowserWindow | null
 //   STAFF_MACHINE_TYPE=normal         # use backend TCP printing (legacy)
 //   STAFF_MACHINE_TYPE=pos|unset     # local USB / render+ack (default for staff kiosks)
 //   STAFF_MACHINE_ID=<stable-id>     # default: os.hostname()
-//   STAFF_PRINTER_DEVICE=...         # Linux: /dev/usb/lp0 | Windows COM: COM3 | WinUSB (Zadig): winusb:0x0483:0x5743
+//   STAFF_PRINTER_DEVICE=...         # Linux: /dev/usb/lp0 (or set explicitly); unset = auto-pick /dev/usb/lp* | Windows: COM3 | winusb:VID:PID
 //   STAFF_PRINTER_BAUD=9600          # serial baud for COM (ZKTeco often 9600; try 115200 if needed)
 type MachineInfo = {
   machineType: 'pos' | 'normal'
@@ -73,13 +74,25 @@ function defaultPrinterDevice(): string {
 /** Set during app startup on Windows when STAFF_PRINTER_DEVICE is not set. */
 let windowsAutoCom = ''
 
+/** Set on Linux (Ubuntu POS) when STAFF_PRINTER_DEVICE is not set—first `/dev/usb/lpN` found. */
+let linuxAutoLp = ''
+
 function getMachineInfo(): MachineInfo {
   const rawType = String(process.env.STAFF_MACHINE_TYPE || '').toLowerCase().trim()
   // Default: POS (no env on the PC). Set STAFF_MACHINE_TYPE=normal for legacy Ethernet printing.
   const machineType: 'pos' | 'normal' = rawType === 'normal' ? 'normal' : 'pos'
   const machineId = String(process.env.STAFF_MACHINE_ID || '').trim() || os.hostname()
   const envDevice = String(process.env.STAFF_PRINTER_DEVICE || '').trim()
-  const printerDevice = envDevice || (process.platform === 'win32' ? windowsAutoCom : '') || defaultPrinterDevice()
+  let printerDevice = envDevice
+  if (!printerDevice && process.platform === 'win32') {
+    printerDevice = windowsAutoCom
+  }
+  if (!printerDevice && process.platform === 'linux') {
+    printerDevice = linuxAutoLp
+  }
+  if (!printerDevice) {
+    printerDevice = defaultPrinterDevice()
+  }
   return { machineType, machineId, printerDevice }
 }
 
@@ -202,6 +215,10 @@ async function refreshPrinterHealth(): Promise<PrinterHealthResult> {
   // so unplug/replug events are reflected quickly in the UI.
   if (process.platform === 'win32' && !String(process.env.STAFF_PRINTER_DEVICE || '').trim()) {
     windowsAutoCom = await discoverWindowsComPrinter()
+    cachedMachineInfo = null
+  }
+  if (process.platform === 'linux' && !String(process.env.STAFF_PRINTER_DEVICE || '').trim()) {
+    linuxAutoLp = await discoverLinuxUsblp()
     cachedMachineInfo = null
   }
   const info = machineInfo()
@@ -327,7 +344,7 @@ function createWindow() {
     win?.hide()
   })
   win.on('close', (event: Electron.Event) => {
-    if (process.platform === 'win32') {
+    if (process.platform === 'win32' || process.platform === 'linux') {
       event.preventDefault()
       win?.hide()
     }
@@ -365,6 +382,10 @@ app.whenReady().then(async () => {
 
   if (process.platform === 'win32' && !String(process.env.STAFF_PRINTER_DEVICE || '').trim()) {
     windowsAutoCom = await discoverWindowsComPrinter()
+    cachedMachineInfo = null
+  }
+  if (process.platform === 'linux' && !String(process.env.STAFF_PRINTER_DEVICE || '').trim()) {
+    linuxAutoLp = await discoverLinuxUsblp()
     cachedMachineInfo = null
   }
 
