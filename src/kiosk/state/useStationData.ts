@@ -107,6 +107,7 @@ export function useStationData({
             totalSeats: q?.totalSeats || 0,
             availableSeats: q?.availableSeats || 0,
             basePrice: dest.basePrice,
+            serviceFee: dest.serviceFee ?? 0.2,
           } as Summary;
         });
         setSummaries(merged);
@@ -214,6 +215,7 @@ export function useStationData({
             totalSeats: queueData?.totalSeats || 0,
             availableSeats: queueData?.availableSeats || 0,
             basePrice: dest.basePrice,
+            serviceFee: dest.serviceFee ?? 0.2,
           };
         });
 
@@ -281,6 +283,7 @@ export function useStationData({
             totalSeats: queueData?.totalSeats || 0,
             availableSeats: queueData?.availableSeats || 0,
             basePrice: dest.basePrice,
+            serviceFee: dest.serviceFee ?? 0.2,
           };
         });
 
@@ -475,6 +478,7 @@ export function useStationData({
                         totalSeats: queueData?.totalSeats || 0,
                         availableSeats: queueData?.availableSeats || 0,
                         basePrice: dest.basePrice,
+                        serviceFee: dest.serviceFee ?? 0.2,
                       };
                     });
 

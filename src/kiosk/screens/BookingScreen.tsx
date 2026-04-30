@@ -4,6 +4,7 @@ import { DndContext, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { cancelOneBookingByQueueEntry, listQueue, listQueueSummaries } from '@/api/client';
+import { updateCustomerDisplay } from '@/services/customerDisplayService';
 import type { UseStationData } from '@/kiosk/state/useStationData';
 import type { UsePosWorkflow } from '@/kiosk/state/usePosWorkflow';
 import type { UseKioskNav } from '@/kiosk/state/useKioskNav';
@@ -38,6 +39,33 @@ function SortableRow({
 }
 
 export function BookingScreen({ station, workflow, nav, showNotification }: BookingScreenProps) {
+  useEffect(() => {
+    if (!station.selected) return;
+    const seats = workflow.selectedSeats.length;
+    const total = seats * ((station.selected.basePrice || 0) + (station.selected.serviceFee ?? 0.2));
+    if (workflow.bookingLoading) {
+      void updateCustomerDisplay({
+        title: 'WASLA',
+        line1: 'Impression...',
+        line2: `${total.toFixed(3)} TND`,
+      });
+      return;
+    }
+    if (seats > 0) {
+      void updateCustomerDisplay({
+        title: station.selected.destinationName,
+        line1: `${seats} place${seats > 1 ? 's' : ''}`,
+        line2: `${total.toFixed(3)} TND`,
+      });
+      return;
+    }
+    void updateCustomerDisplay({
+      title: station.selected.destinationName,
+      line1: 'Selectionnez',
+      line2: 'Merci',
+    });
+  }, [station.selected, workflow.selectedSeats, workflow.bookingLoading]);
+
   useEffect(() => {
     if (!nav.selectedDestinationId) return;
     if (station.selected?.destinationId === nav.selectedDestinationId) return;
@@ -159,21 +187,6 @@ export function BookingScreen({ station, workflow, nav, showNotification }: Book
                       disabled={index === station.queue.length - 1 || station.reordering}
                       className="h-7 px-2 rounded border border-slate-200 text-[11px] text-slate-600 disabled:opacity-40"
                     >↓</button>
-                    <button
-                      type="button"
-                      onClick={() => workflow.handleTransferSeats(entry.id)}
-                      className="h-7 px-2.5 rounded border border-amber-200 bg-amber-50 text-[11px] text-amber-700"
-                    >Transférer</button>
-                    <button
-                      type="button"
-                      onClick={() => workflow.handleChangeDestination(entry.id)}
-                      className="h-7 px-2.5 rounded border border-indigo-200 bg-indigo-50 text-[11px] text-indigo-700"
-                    >Changer destination</button>
-                    <button
-                      type="button"
-                      onClick={() => workflow.handleRemoveFromQueue(entry.id)}
-                      className="h-7 px-2.5 rounded border border-red-200 bg-red-50 text-[11px] text-red-700"
-                    >Retirer</button>
                   </div>
                       </div>
                     </SortableRow>
@@ -257,7 +270,15 @@ export function BookingScreen({ station, workflow, nav, showNotification }: Book
                           });
                           station.setQueue(items);
                           const summariesResponse = await listQueueSummaries();
-                          station.setSummaries(summariesResponse.data || []);
+                          station.setSummaries(
+                            (summariesResponse.data || []).map((s) => ({
+                              ...s,
+                              serviceFee:
+                                station.summaries.find((x) => x.destinationId === s.destinationId)?.serviceFee ??
+                                station.allDestinations.find((d) => d.id === s.destinationId)?.serviceFee ??
+                                0.2,
+                            })),
+                          );
                         } finally {
                           station.setLoading(false);
                         }
@@ -275,7 +296,10 @@ export function BookingScreen({ station, workflow, nav, showNotification }: Book
                 )}
                 <div className="text-center">
                   <div className="text-lg font-bold mb-2 tabular-nums text-slate-800">
-                    {(workflow.selectedSeats.length * (station.selected?.basePrice || 0) + (workflow.selectedSeats.length * 0.2)).toFixed(2)}{' '}
+                    {(
+                      workflow.selectedSeats.length *
+                      ((station.selected?.basePrice || 0) + (station.selected?.serviceFee ?? 0.2))
+                    ).toFixed(2)}{' '}
                     <span className="text-xs font-semibold text-slate-400">TND</span>
                   </div>
                   <button
@@ -309,75 +333,6 @@ export function BookingScreen({ station, workflow, nav, showNotification }: Book
           </button>
         </div>
       </div>
-
-      {workflow.transferModalOpen && workflow.transferFromEntry && (
-        <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white rounded-xl p-4 shadow-xl">
-            <h3 className="text-sm font-bold text-slate-800">Transférer des sièges</h3>
-            <p className="text-xs text-slate-500 mt-1">Depuis {workflow.transferFromEntry.licensePlate}</p>
-            <input
-              value={workflow.transferSearchQuery}
-              onChange={(e) => workflow.setTransferSearchQuery(e.target.value)}
-              placeholder="Chercher un véhicule"
-              className="mt-3 w-full h-10 rounded-lg border border-slate-200 px-3 text-sm"
-            />
-            <div className="mt-2 grid grid-cols-5 gap-1.5">
-              {[1,2,3,4,5].map((n) => (
-                <button key={n} onClick={() => workflow.setTransferSeatsCount(n)} className={`h-8 rounded border text-xs ${workflow.transferSeatsCount===n?'bg-blue-600 text-white border-blue-600':'border-slate-200 text-slate-600'}`}>{n}</button>
-              ))}
-            </div>
-            <div className="mt-3 max-h-40 overflow-y-auto space-y-1">
-              {station.queue
-                .filter((q) => q.id !== workflow.transferFromEntry?.id)
-                .filter((q) => q.licensePlate.toLowerCase().includes(workflow.transferSearchQuery.toLowerCase()))
-                .map((q) => (
-                  <button
-                    key={q.id}
-                    onClick={() => workflow.handleConfirmTransfer(q)}
-                    className="w-full text-left h-9 px-3 rounded border border-slate-200 hover:bg-slate-50 text-sm"
-                  >
-                    {q.licensePlate} ({q.availableSeats}/{q.totalSeats})
-                  </button>
-                ))}
-            </div>
-            <div className="mt-3 flex justify-end">
-              <button onClick={() => workflow.setTransferModalOpen(false)} className="h-9 px-3 rounded bg-slate-100 text-sm">Fermer</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {workflow.changeDestModalOpen && workflow.changeDestFromEntry && (
-        <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white rounded-xl p-4 shadow-xl">
-            <h3 className="text-sm font-bold text-slate-800">Changer destination</h3>
-            <p className="text-xs text-slate-500 mt-1">Véhicule {workflow.changeDestFromEntry.licensePlate}</p>
-            <div className="mt-3 max-h-52 overflow-y-auto space-y-1">
-              {workflow.loadingStations ? (
-                <div className="text-xs text-slate-500">Chargement…</div>
-              ) : (
-                (workflow.authorizedStations as Array<Record<string, unknown>>).map((d, idx) => (
-                  <button
-                    key={String(d.stationId ?? d.id ?? idx)}
-                    onClick={() =>
-                      workflow.handleConfirmChangeDestination({
-                        stationId: String(d.stationId ?? d.id ?? ''),
-                        stationName: String(d.stationName ?? d.name ?? ''),
-                      })
-                    }
-                    className="w-full text-left h-9 px-3 rounded border border-slate-200 hover:bg-slate-50 text-sm"
-                  >
-                    {String(d.stationName ?? d.name ?? '')}
-                  </button>
-                ))
-              )}
-            </div>
-            <div className="mt-3 flex justify-end">
-              <button onClick={() => workflow.setChangeDestModalOpen(false)} className="h-9 px-3 rounded bg-slate-100 text-sm">Fermer</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {workflow.addVehicleModalOpen && (
         <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">

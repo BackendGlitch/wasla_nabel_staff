@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   cancelOneBookingByQueueEntry,
   listQueue,
@@ -38,337 +37,6 @@ import { usePosWorkflow } from "@/kiosk/state/usePosWorkflow";
 // these types from MainPage. Step 6 will retire them when the in-file modal
 // components are extracted to `src/kiosk/modals/`.
 export type { Summary, QueueEntry };
-
-// Action Menu Component
-function ActionMenu({ 
-  entry,
-  onRemove, 
-  onTransferSeats, 
-  onChangeDestination
-}: { 
-  entry: QueueEntry;
-  onRemove: () => void;
-  onTransferSeats: () => void;
-  onChangeDestination: () => void;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen]);
-
-  return (
-    <div className="relative" ref={menuRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="p-1.5 hover:bg-gray-100 rounded transition-colors"
-        title="Plus d'actions"
-      >
-        <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-        </svg>
-      </button>
-
-      {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-md shadow-lg z-50 overflow-hidden">
-          <div className="py-1">
-            <button
-              onClick={() => {
-                onRemove();
-                setIsOpen(false);
-              }}
-              className="w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 transition-colors"
-            >
-              Retirer de la file
-            </button>
-            <button
-              onClick={() => {
-                onTransferSeats();
-                setIsOpen(false);
-              }}
-              disabled={!(entry.availableSeats && entry.availableSeats > 0)}
-              className={`w-full px-3 py-2 text-left text-xs transition-colors ${
-                !(entry.availableSeats && entry.availableSeats > 0)
-                  ? 'text-gray-400 cursor-not-allowed'
-                  : 'text-blue-700 hover:bg-blue-50'
-              }`}
-              title={!(entry.availableSeats && entry.availableSeats > 0) ? 'Aucun siège disponible à transférer' : 'Transférer des sièges'}
-            >
-              Transférer des sièges
-            </button>
-            <button
-              onClick={() => {
-                onChangeDestination();
-                setIsOpen(false);
-              }}
-              disabled={!(entry.availableSeats && entry.availableSeats > 0)}
-              className={`w-full px-3 py-2 text-left text-xs transition-colors ${
-                !(entry.availableSeats && entry.availableSeats > 0)
-                  ? 'text-gray-400 cursor-not-allowed'
-                  : 'text-emerald-700 hover:bg-emerald-50'
-              }`}
-              title={!(entry.availableSeats && entry.availableSeats > 0) ? 'Impossible de changer de destination lorsque complet' : 'Changer de destination'}
-            >
-              Changer de destination
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Transfer Seats Modal Component
-function TransferSeatsModal({
-  isOpen,
-  onClose,
-  fromEntry,
-  seatsCount,
-  onSeatsCountChange,
-  searchQuery,
-  onSearchChange,
-  queue,
-  onConfirmTransfer
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  fromEntry: QueueEntry | null;
-  seatsCount: number;
-  onSeatsCountChange: (count: number) => void;
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
-  queue: QueueEntry[];
-  onConfirmTransfer: (toEntry: QueueEntry) => void;
-}) {
-  if (!isOpen || !fromEntry) return null;
-
-  // Filter queue based on search query
-  const filteredQueue = queue.filter(entry => 
-    entry.id !== fromEntry.id && // Exclude the source vehicle
-    entry.licensePlate.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="p-5">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-base font-semibold text-gray-900">Transférer des sièges</h2>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          {/* Source Vehicle Info */}
-          <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-md">
-            <div className="text-xs text-gray-600 mb-1 font-medium">Transfert depuis</div>
-            <div className="text-sm font-semibold text-gray-900">{fromEntry.licensePlate}</div>
-            <div className="text-xs text-gray-600 mt-1">
-              {fromEntry.availableSeats} / {fromEntry.totalSeats} sièges disponibles
-              {fromEntry.bookedSeats && fromEntry.bookedSeats > 0 && (
-                <span className="text-amber-600 ml-1.5">({fromEntry.bookedSeats} réservés)</span>
-              )}
-            </div>
-          </div>
-
-          {/* Seats Count Input */}
-          <div className="mb-4">
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              Nombre de sièges à transférer
-            </label>
-            <Input
-              type="number"
-              min="1"
-              max={fromEntry.bookedSeats ?? 0}
-              value={seatsCount}
-              onChange={(e) => {
-                const raw = Number(e.target.value);
-                const max = fromEntry.bookedSeats ?? 0;
-                const clamped = Math.max(1, Math.min(raw, max));
-                onSeatsCountChange(clamped);
-              }}
-              className="text-sm"
-            />
-          </div>
-
-          {/* Search Input */}
-          <div className="mb-4">
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              Rechercher un véhicule destinataire
-            </label>
-            <Input
-              type="text"
-              placeholder="Rechercher par immatriculation..."
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              className="text-sm"
-            />
-          </div>
-
-          {/* Vehicle List */}
-          <div className="mb-4">
-            <div className="text-xs font-medium text-gray-700 mb-2">Véhicules disponibles</div>
-            <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-md divide-y divide-gray-100">
-              {filteredQueue.length === 0 ? (
-                <div className="p-4 text-center text-xs text-gray-500">
-                  {searchQuery ? 'Aucun véhicule ne correspond à votre recherche.' : 'Aucun autre véhicule dans la file.'}
-                </div>
-              ) : (
-                filteredQueue.map((entry) => (
-                  <button
-                    key={entry.id}
-                    onClick={() => onConfirmTransfer(entry)}
-                    className="w-full p-3 text-left hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900">{entry.licensePlate}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">Position {entry.queuePosition}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-sm font-semibold text-emerald-600">{entry.availableSeats} / {entry.totalSeats}</div>
-                        <div className="text-xs text-gray-500">
-                          {entry.bookedSeats && entry.bookedSeats > 0 ? `${entry.bookedSeats} réservés` : 'disponible'}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              className="h-8 px-3 text-xs"
-            >
-              Annuler
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Change Destination Modal Component
-function ChangeDestinationModal({
-  isOpen,
-  onClose,
-  fromEntry,
-  authorizedStations,
-  loadingStations,
-  onConfirmChange
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  fromEntry: QueueEntry | null;
-  authorizedStations: any[];
-  loadingStations: boolean;
-  onConfirmChange: (station: any) => void;
-}) {
-  if (!isOpen || !fromEntry) return null;
-
-  return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="p-5">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-base font-semibold text-gray-900">Changer de destination</h2>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          {/* Source Vehicle Info */}
-          <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-md">
-            <div className="text-xs text-gray-600 mb-1 font-medium">Véhicule à déplacer</div>
-            <div className="text-sm font-semibold text-gray-900">{fromEntry.licensePlate}</div>
-            <div className="text-xs text-gray-600 mt-1">Position actuelle: {fromEntry.queuePosition}</div>
-          </div>
-
-          {/* Authorized Stations */}
-          <div className="mb-4">
-            <div className="text-xs font-medium text-gray-700 mb-2">Sélectionner une nouvelle destination</div>
-            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md divide-y divide-gray-100">
-              {loadingStations ? (
-                <div className="p-4 text-center">
-                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent mx-auto mb-2"></div>
-                  <div className="text-xs text-gray-500">Chargement des stations autorisées…</div>
-                </div>
-              ) : authorizedStations.length === 0 ? (
-                <div className="p-4 text-center text-xs text-gray-500">
-                  Aucune station autorisée pour ce véhicule.
-                </div>
-              ) : (
-                authorizedStations.map((station) => (
-                  <button
-                    key={station.id}
-                    onClick={() => onConfirmChange(station)}
-                    className="w-full p-3 text-left hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900">{station.stationName}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          Priorité: {station.priority}
-                          {station.isDefault && <span className="ml-1.5 text-blue-600 font-medium">(Par défaut)</span>}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-xs text-gray-500">ID: {station.stationId}</div>
-                      </div>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              className="h-8 px-3 text-xs"
-            >
-              Annuler
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 // Vehicle Trips Count Modal Component (unused; staff app removed this feature)
@@ -842,9 +510,6 @@ function SortableQueueItem({
   totalItems,
   onMoveUp, 
   onMoveDown,
-  onRemove,
-  onTransferSeats,
-  onChangeDestination,
   onSelectForBooking,
   isSelectedForBooking
 }: { 
@@ -853,9 +518,6 @@ function SortableQueueItem({
   totalItems: number;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  onRemove: () => void;
-  onTransferSeats: () => void;
-  onChangeDestination: () => void;
   onSelectForBooking: () => void;
   isSelectedForBooking: boolean;
 }) {
@@ -930,8 +592,6 @@ function SortableQueueItem({
               className="cursor-grab active:cursor-grabbing p-1 rounded-lg hover:bg-slate-100 transition-colors text-slate-300 hover:text-slate-500">
               <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm8-16a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
             </div>
-            <ActionMenu entry={entry} onRemove={onRemove} onTransferSeats={onTransferSeats}
-              onChangeDestination={onChangeDestination} />
           </div>
         </div>
       </div>
@@ -1008,23 +668,6 @@ export default function MainPage() {
     handleDragEnd,
     handleMoveUp,
     handleMoveDown,
-    handleRemoveFromQueue,
-    handleTransferSeats,
-    handleChangeDestination,
-    transferModalOpen,
-    setTransferModalOpen,
-    transferFromEntry,
-    transferSeatsCount,
-    setTransferSeatsCount,
-    transferSearchQuery,
-    setTransferSearchQuery,
-    handleConfirmTransfer,
-    changeDestModalOpen,
-    setChangeDestModalOpen,
-    changeDestFromEntry,
-    authorizedStations,
-    loadingStations,
-    handleConfirmChangeDestination,
     addVehicleModalOpen,
     setAddVehicleModalOpen,
     vehicleSearchQuery,
@@ -1326,9 +969,6 @@ export default function MainPage() {
                           totalItems={(queue || []).length}
                           onMoveUp={() => handleMoveUp(index)}
                           onMoveDown={() => handleMoveDown(index)}
-                          onRemove={() => handleRemoveFromQueue(entry.id)}
-                          onTransferSeats={() => handleTransferSeats(entry.id)}
-                          onChangeDestination={() => handleChangeDestination(entry.id)}
                           onSelectForBooking={() => {
                             if (selectedVehicleForBooking?.id === entry.id) {
                               setSelectedVehicleForBooking(null);
@@ -1421,7 +1061,13 @@ export default function MainPage() {
                       <div className="flex items-center justify-center gap-6">
                         <div className="text-center">
                           <div className="text-2xl font-bold text-violet-800 tabular-nums">
-                            {(selectedSeats.length * (selectedGhostDestination.basePrice || 0) + (selectedSeats.length * 0.2)).toFixed(2)}
+                            {(
+                              selectedSeats.length *
+                              (
+                                (selectedGhostDestination.basePrice || 0) +
+                                (selectedGhostDestination.serviceFee ?? 0.2)
+                              )
+                            ).toFixed(2)}
                           </div>
                           <div className="text-xs text-violet-500 mt-0.5">TND total</div>
                         </div>
@@ -1583,7 +1229,15 @@ export default function MainPage() {
                                 })) as QueueEntry[];
                                 setQueue(items);
                                 const summariesResponse = await listQueueSummaries();
-                                setSummaries(summariesResponse.data || []);
+                                setSummaries(
+                                  (summariesResponse.data || []).map((s: any) => ({
+                                    ...s,
+                                    serviceFee:
+                                      summaries.find((x) => x.destinationId === s.destinationId)?.serviceFee ??
+                                      allDestinations.find((d) => d.id === s.destinationId)?.serviceFee ??
+                                      0.2,
+                                  }))
+                                );
                               } finally { setLoading(false); }
                             } catch (error) {
                               showNotification((error as any)?.message || "Échec de l'annulation.", 'error');
@@ -1600,7 +1254,10 @@ export default function MainPage() {
                       
                       <div className="text-center">
                         <div className="text-lg font-bold mb-2 tabular-nums text-slate-800">
-                          {(selectedSeats.length * (selected?.basePrice || 0) + (selectedSeats.length * 0.2)).toFixed(2)} <span className="text-xs font-semibold text-slate-400">TND</span>
+                          {(
+                            selectedSeats.length *
+                            ((selected?.basePrice || 0) + (selected?.serviceFee ?? 0.2))
+                          ).toFixed(2)} <span className="text-xs font-semibold text-slate-400">TND</span>
                         </div>
                         <button
                           onClick={handleConfirmBooking}
@@ -1626,29 +1283,6 @@ export default function MainPage() {
           )}
         </div>
       </div>
-
-      {/* Transfer Seats Modal */}
-      <TransferSeatsModal
-        isOpen={transferModalOpen}
-        onClose={() => setTransferModalOpen(false)}
-        fromEntry={transferFromEntry}
-        seatsCount={transferSeatsCount}
-        onSeatsCountChange={setTransferSeatsCount}
-        searchQuery={transferSearchQuery}
-        onSearchChange={setTransferSearchQuery}
-        queue={queue}
-        onConfirmTransfer={handleConfirmTransfer}
-      />
-
-      {/* Change Destination Modal */}
-      <ChangeDestinationModal
-        isOpen={changeDestModalOpen}
-        onClose={() => setChangeDestModalOpen(false)}
-        fromEntry={changeDestFromEntry}
-        authorizedStations={authorizedStations}
-        loadingStations={loadingStations}
-        onConfirmChange={handleConfirmChangeDestination}
-      />
 
       {/* Add Vehicle Modal */}
       <AddVehicleModal

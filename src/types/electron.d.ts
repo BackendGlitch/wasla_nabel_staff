@@ -60,6 +60,11 @@ export interface WaslaAPI {
     jobId?: string;
   }) => Promise<WaslaPrintResult>;
   checkPrinter: () => Promise<WaslaPrinterHealth>;
+  updateCustomerDisplay: (payload: {
+    title?: string;
+    line1?: string;
+    line2?: string;
+  }) => Promise<{ ok: boolean; reason?: string }>;
   installCh341Driver: () => Promise<{ success: boolean; error?: string }>;
 }
 

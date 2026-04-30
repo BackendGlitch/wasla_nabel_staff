@@ -1,38 +1,39 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
-} from '@dnd-kit/core';
-import { arrayMove, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
+} from "@dnd-kit/core";
+import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import {
   addVehicleToQueue,
-  changeDestination,
   createBookingByDestination,
   createBookingByQueueEntry,
   createGhostBooking,
-  deleteQueueEntry,
   getStaffInfo,
   getVehicleAuthorizedRoutes,
   reorderQueue,
   searchVehicles,
-  transferSeats,
-} from '@/api/client';
-import { printerService, type TicketData } from '@/services/printerService';
+} from "@/api/client";
+import { printerService, type TicketData } from "@/services/printerService";
 import {
   enqueueOfflineAction,
   isOnline,
   newActionId,
   processOfflineQueue,
-} from '@/services/offlineQueue';
-import type { GhostBookingForReprint, QueueEntry, Summary } from '@/kiosk/types';
-import type { UseStationData } from './useStationData';
+} from "@/services/offlineQueue";
+import type {
+  GhostBookingForReprint,
+  QueueEntry,
+  Summary,
+} from "@/kiosk/types";
+import type { UseStationData } from "./useStationData";
 
 export interface UsePosWorkflowOptions {
   station: UseStationData;
-  showNotification: (message: string, type?: 'success' | 'error') => void;
+  showNotification: (message: string, type?: "success" | "error") => void;
 }
 
 /**
@@ -46,7 +47,7 @@ function getStaffInfoLocal() {
     return jwtInfo;
   }
   try {
-    const stored = localStorage.getItem('staffInfo');
+    const stored = localStorage.getItem("staffInfo");
     if (stored) {
       return JSON.parse(stored);
     }
@@ -56,6 +57,38 @@ function getStaffInfoLocal() {
   return null;
 }
 
+/** Prefer JWT first+last; never show API login usernames like staff_supervisor_001 on tickets. */
+function bookingPrintStaffFields(
+  booking: { createdByName?: string; createdBy?: string },
+  staff:
+    | ReturnType<typeof getStaffInfoLocal>
+    | { firstName?: string; lastName?: string }
+    | null,
+): Pick<
+  TicketData,
+  "staffFirstName" | "staffLastName" | "createdByName" | "createdBy"
+> {
+  const fn = ((staff?.firstName ?? "") as string).trim();
+  const ln = ((staff?.lastName ?? "") as string).trim();
+  const jwtName = `${fn} ${ln}`.trim();
+  const apiName = (booking?.createdByName ?? "").trim();
+
+  const technical = (s: string) => {
+    const low = s.toLowerCase();
+    return low.includes("staff_supervisor") || (!s.includes(" ") && low.startsWith("staff_"));
+  };
+
+  const display =
+    jwtName || (apiName && !technical(apiName) ? apiName : "");
+
+  return {
+    staffFirstName: fn,
+    staffLastName: ln,
+    ...(display ? { createdByName: display } : {}),
+    createdBy: display || "Staff",
+  };
+}
+
 /**
  * Operator workflow.
  *
@@ -63,7 +96,7 @@ function getStaffInfoLocal() {
  * queue or trigger printing:
  *   - booking flow (seat picker, vehicle selection, talon printing).
  *   - ghost mode (direct destination booking with reprint memory).
- *   - queue management modals (transfer seats, change destination, add).
+ *   - queue management modal (add vehicle).
  *   - vehicle search with debounced + race-controlled requests.
  *   - drag-and-drop / arrow-button reorder.
  *   - the durable, idempotent talon-print retry loop.
@@ -73,7 +106,10 @@ function getStaffInfoLocal() {
  * showNotification callback. Nothing visual lives here — UI is left to
  * `MainPage.tsx` (Step 1) and the future kiosk screens (Step 2+).
  */
-export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOptions) {
+export function usePosWorkflow({
+  station,
+  showNotification,
+}: UsePosWorkflowOptions) {
   const staffInfo = getStaffInfoLocal();
 
   // ── Booking ──────────────────────────────────────────────────────────────
@@ -82,25 +118,15 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
   const [selectedVehicleForBooking, setSelectedVehicleForBooking] =
     useState<QueueEntry | null>(null);
 
-  // ── Modal: transfer seats ────────────────────────────────────────────────
-  const [transferModalOpen, setTransferModalOpen] = useState(false);
-  const [transferFromEntry, setTransferFromEntry] = useState<QueueEntry | null>(null);
-  const [transferSeatsCount, setTransferSeatsCount] = useState(1);
-  const [transferSearchQuery, setTransferSearchQuery] = useState('');
-
-  // ── Modal: change destination ────────────────────────────────────────────
-  const [changeDestModalOpen, setChangeDestModalOpen] = useState(false);
-  const [changeDestFromEntry, setChangeDestFromEntry] = useState<QueueEntry | null>(null);
-  const [authorizedStations, setAuthorizedStations] = useState<unknown[]>([]);
-  const [loadingStations, setLoadingStations] = useState(false);
-
   // ── Modal: add vehicle ───────────────────────────────────────────────────
   const [addVehicleModalOpen, setAddVehicleModalOpen] = useState(false);
-  const [vehicleSearchQuery, setVehicleSearchQuery] = useState('');
+  const [vehicleSearchQuery, setVehicleSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<unknown[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<unknown>(null);
-  const [vehicleAuthorizedStations, setVehicleAuthorizedStations] = useState<unknown[]>([]);
+  const [vehicleAuthorizedStations, setVehicleAuthorizedStations] = useState<
+    unknown[]
+  >([]);
   const [loadingVehicleStations, setLoadingVehicleStations] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const vehicleSearchDebounceRef = useRef<number | null>(null);
@@ -108,7 +134,8 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
 
   // ── Ghost mode ───────────────────────────────────────────────────────────
   const [isGhostMode, setIsGhostMode] = useState(false);
-  const [selectedGhostDestination, setSelectedGhostDestination] = useState<Summary | null>(null);
+  const [selectedGhostDestination, setSelectedGhostDestination] =
+    useState<Summary | null>(null);
   const ghostDebounceRef = useRef<number | null>(null);
   const ghostLastActionRef = useRef<{
     idempotencyKey: string;
@@ -122,14 +149,16 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
   // ── DnD sensors ──────────────────────────────────────────────────────────
   const sensors = useSensors(
     useSensor(PointerSensor),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 
   // ── Persistence helpers ──────────────────────────────────────────────────
   const saveSelectedVehicle = useCallback((vehicle: QueueEntry | null) => {
     if (vehicle) {
       localStorage.setItem(
-        'selectedVehicleForBooking',
+        "selectedVehicleForBooking",
         JSON.stringify({
           id: vehicle.id,
           vehicleId: vehicle.vehicleId,
@@ -138,7 +167,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         }),
       );
     } else {
-      localStorage.removeItem('selectedVehicleForBooking');
+      localStorage.removeItem("selectedVehicleForBooking");
     }
   }, []);
 
@@ -149,20 +178,27 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
 
   const restoreSelectedVehicle = useCallback(() => {
     try {
-      const saved = localStorage.getItem('selectedVehicleForBooking');
+      const saved = localStorage.getItem("selectedVehicleForBooking");
       if (saved) {
         const savedVehicle = JSON.parse(saved);
-        const currentVehicle = queueRef.current.find((v) => v.id === savedVehicle.id);
+        const currentVehicle = queueRef.current.find(
+          (v) => v.id === savedVehicle.id,
+        );
         if (currentVehicle) {
           setSelectedVehicleForBooking(currentVehicle);
-          console.log('Restored selected vehicle:', currentVehicle.licensePlate);
+          console.log(
+            "Restored selected vehicle:",
+            currentVehicle.licensePlate,
+          );
         } else {
-          console.log('Vehicle not found in queue, keeping selection in localStorage');
+          console.log(
+            "Vehicle not found in queue, keeping selection in localStorage",
+          );
         }
       }
     } catch (error) {
-      console.error('Failed to restore selected vehicle:', error);
-      localStorage.removeItem('selectedVehicleForBooking');
+      console.error("Failed to restore selected vehicle:", error);
+      localStorage.removeItem("selectedVehicleForBooking");
     }
   }, []);
 
@@ -186,7 +222,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
 
         await station.refreshQueueAndSummaries();
       } catch (error) {
-        console.error('Failed to reorder queue:', error);
+        console.error("Failed to reorder queue:", error);
         station.setQueue(previousQueue);
       } finally {
         station.setReordering(false);
@@ -199,8 +235,12 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     async (event: DragEndEvent) => {
       const { active, over } = event;
       if (active.id !== over?.id && station.selected) {
-        const oldIndex = station.queue.findIndex((item) => item.id === active.id);
-        const newIndex = station.queue.findIndex((item) => item.id === over?.id);
+        const oldIndex = station.queue.findIndex(
+          (item) => item.id === active.id,
+        );
+        const newIndex = station.queue.findIndex(
+          (item) => item.id === over?.id,
+        );
         if (oldIndex !== -1 && newIndex !== -1) {
           await reorderQueueItems(oldIndex, newIndex);
         }
@@ -225,199 +265,6 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
       }
     },
     [station.selected, station.queue.length, reorderQueueItems],
-  );
-
-  // ── Per-row queue actions ────────────────────────────────────────────────
-  const handleRemoveFromQueue = useCallback(
-    async (entryId: string) => {
-      if (!station.selected) return;
-      const entry = station.queue.find((item) => item.id === entryId);
-      if (!entry) return;
-
-      const bookedSeats = entry.totalSeats - entry.availableSeats;
-      const hasBookedSeats = bookedSeats > 0;
-
-      if (hasBookedSeats) {
-        const nextVehicle = station.queue.find(
-          (item) => item.queuePosition === entry.queuePosition + 1,
-        );
-        if (nextVehicle) {
-          showNotification(
-            `Ce véhicule a ${bookedSeats} sièges réservés. Les sièges seront transférés au véhicule suivant: ${nextVehicle.licensePlate}`,
-            'success',
-          );
-        } else {
-          showNotification(
-            `Ce véhicule a ${bookedSeats} sièges réservés. Il n'y a pas de véhicule suivant dans la file pour transférer les sièges.`,
-            'error',
-          );
-        }
-      }
-
-      try {
-        await deleteQueueEntry(station.selected.destinationId, entryId);
-        const updatedQueue = station.queue.filter((item) => item.id !== entryId);
-        station.setQueue(updatedQueue);
-
-        if (updatedQueue.length === 0 && station.selected) {
-          const updatedSelected = {
-            ...station.selected,
-            totalVehicles: 0,
-            totalSeats: 0,
-            availableSeats: 0,
-          };
-          station.setSelected(updatedSelected);
-          station.setSummaries((prev) =>
-            prev.map((summary) =>
-              summary.destinationId === station.selected!.destinationId
-                ? updatedSelected
-                : summary,
-            ),
-          );
-        }
-
-        if (updatedQueue.length === 0) {
-          showNotification(
-            `Le véhicule ${entry.licensePlate} a été retiré. La file ${station.selected.destinationName} est maintenant vide.`,
-            'success',
-          );
-        } else {
-          showNotification(
-            `Le véhicule ${entry.licensePlate} a été retiré de la file ${station.selected.destinationName}.`,
-            'success',
-          );
-        }
-
-        await station.refreshQueueAndSummaries();
-        console.log('Successfully removed from queue:', entryId);
-      } catch (error) {
-        console.error('Échec du retrait de la file :', error);
-        showNotification('Échec du retrait du Vehicule de la file. Veuillez réessayer.', 'error');
-      }
-    },
-    [station, showNotification],
-  );
-
-  const handleTransferSeats = useCallback(
-    async (entryId: string) => {
-      if (!station.selected) return;
-      const entry = station.queue.find((item) => item.id === entryId);
-      if (!entry) return;
-      setTransferFromEntry(entry);
-      setTransferSeatsCount(1);
-      setTransferSearchQuery('');
-      setTransferModalOpen(true);
-    },
-    [station.selected, station.queue],
-  );
-
-  const handleConfirmTransfer = useCallback(
-    async (toEntry: QueueEntry) => {
-      if (!station.selected || !transferFromEntry) return;
-
-      try {
-        const maxTransferable = transferFromEntry.bookedSeats ?? 0;
-        if (transferSeatsCount < 1 || transferSeatsCount > maxTransferable) {
-          showNotification(
-            `Vous ne pouvez transférer que jusqu'à ${maxTransferable} sièges réservés.`,
-            'error',
-          );
-          return;
-        }
-        console.log('Transfer seats request:', {
-          destinationId: station.selected.destinationId,
-          fromEntryId: transferFromEntry.id,
-          toEntryId: toEntry.id,
-          seats: transferSeatsCount,
-          fromEntry: transferFromEntry,
-          toEntry,
-        });
-
-        await transferSeats(
-          station.selected.destinationId,
-          transferFromEntry.id,
-          toEntry.id,
-          transferSeatsCount,
-        );
-
-        await station.refreshQueueAndSummaries();
-
-        setTransferModalOpen(false);
-        setTransferFromEntry(null);
-
-        showNotification(
-          `Transfert réussi: ${transferSeatsCount} sièges de ${transferFromEntry.licensePlate} vers ${toEntry.licensePlate}`,
-          'success',
-        );
-        console.log(
-          `Successfully transferred ${transferSeatsCount} seats from ${transferFromEntry.licensePlate} to ${toEntry.licensePlate}`,
-        );
-      } catch (error) {
-        console.error('Failed to transfer seats:', error);
-        showNotification('Échec du transfert des sièges. Veuillez réessayer.', 'error');
-      }
-    },
-    [station, transferFromEntry, transferSeatsCount, showNotification],
-  );
-
-  const handleChangeDestination = useCallback(
-    async (entryId: string) => {
-      if (!station.selected) return;
-      const entry = station.queue.find((item) => item.id === entryId);
-      if (!entry) return;
-
-      setChangeDestFromEntry(entry);
-      setAuthorizedStations([]);
-      setChangeDestModalOpen(true);
-      setLoadingStations(true);
-
-      try {
-        const response = await getVehicleAuthorizedRoutes(entry.vehicleId);
-        setAuthorizedStations(response.data);
-      } catch (error) {
-        console.error('Failed to load authorized stations:', error);
-        showNotification(
-          'Échec du chargement des stations autorisées. Veuillez réessayer.',
-          'error',
-        );
-      } finally {
-        setLoadingStations(false);
-      }
-    },
-    [station.selected, station.queue, showNotification],
-  );
-
-  const handleConfirmChangeDestination = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (stationArg: any) => {
-      if (!station.selected || !changeDestFromEntry) return;
-
-      try {
-        await changeDestination(
-          station.selected.destinationId,
-          changeDestFromEntry.id,
-          stationArg.stationId,
-          stationArg.stationName,
-        );
-
-        await station.refreshQueueAndSummaries();
-
-        setChangeDestModalOpen(false);
-        setChangeDestFromEntry(null);
-
-        showNotification(
-          `${changeDestFromEntry.licensePlate} déplacé vers ${stationArg.stationName}`,
-          'success',
-        );
-        console.log(
-          `Successfully moved ${changeDestFromEntry.licensePlate} to ${stationArg.stationName}`,
-        );
-      } catch (error) {
-        console.error('Failed to change destination:', error);
-        showNotification('Échec du changement de destination. Veuillez réessayer.', 'error');
-      }
-    },
-    [station, changeDestFromEntry, showNotification],
   );
 
   // ── Add vehicle: search + select + confirm ───────────────────────────────
@@ -446,13 +293,17 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         }
       } else {
         setSearchResults([]);
-        setSearchError('Aucun Vehicule trouvé correspondant à votre recherche.');
+        setSearchError(
+          "Aucun Vehicule trouvé correspondant à votre recherche.",
+        );
       }
     } catch (error) {
-      console.error('Échec de la recherche de Vehicules :', error);
+      console.error("Échec de la recherche de Vehicules :", error);
       if (seq === latestSearchSeqRef.current) {
         setSearchResults([]);
-        setSearchError('Échec de la recherche de Vehicules. Veuillez réessayer.');
+        setSearchError(
+          "Échec de la recherche de Vehicules. Veuillez réessayer.",
+        );
       }
     } finally {
       if (seq === latestSearchSeqRef.current) {
@@ -478,7 +329,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (vehicle: any) => {
       if (!vehicle || !vehicle.id) {
-        console.error('Vehicule sélectionné non valide');
+        console.error("Vehicule sélectionné non valide");
         return;
       }
 
@@ -492,10 +343,13 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
           setVehicleAuthorizedStations(response.data);
         } else {
           setVehicleAuthorizedStations([]);
-          console.warn('Aucune station autorisée trouvée pour le Vehicule :', vehicle.licensePlate);
+          console.warn(
+            "Aucune station autorisée trouvée pour le Vehicule :",
+            vehicle.licensePlate,
+          );
         }
       } catch (error) {
-        console.error('Échec du chargement des stations autorisées :', error);
+        console.error("Échec du chargement des stations autorisées :", error);
         setVehicleAuthorizedStations([]);
       } finally {
         setLoadingVehicleStations(false);
@@ -513,27 +367,33 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
 
       try {
         setLoadingVehicleStations(true);
-        await addVehicleToQueue(stationArg.stationId, veh.id, stationArg.stationName);
+        await addVehicleToQueue(
+          stationArg.stationId,
+          veh.id,
+          stationArg.stationName,
+        );
 
         showNotification(
           `${veh.licensePlate} ajouté à la file de ${stationArg.stationName}`,
-          'success',
+          "success",
         );
 
         await station.refreshQueueAndSummaries(stationArg.stationId);
 
         setAddVehicleModalOpen(false);
-        setVehicleSearchQuery('');
+        setVehicleSearchQuery("");
         setSearchResults([]);
         setSelectedVehicle(null);
         setVehicleAuthorizedStations([]);
 
-        console.log(`Successfully added ${veh.licensePlate} to ${stationArg.stationName} queue`);
+        console.log(
+          `Successfully added ${veh.licensePlate} to ${stationArg.stationName} queue`,
+        );
       } catch (error) {
-        console.error('Échec de l\'ajout du Vehicule à la file :', error);
+        console.error("Échec de l'ajout du Vehicule à la file :", error);
         showNotification(
-          'Échec de l\'ajout du Vehicule à la file. Veuillez réessayer.',
-          'error',
+          "Échec de l'ajout du Vehicule à la file. Veuillez réessayer.",
+          "error",
         );
       } finally {
         setLoadingVehicleStations(false);
@@ -548,21 +408,25 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
   }, []);
 
   /**
-   * Money-critical: enqueue a talon and wait until the durable job reaches
-   * `printed`. Each retry uses a unique idempotency key suffix so the backend
-   * does not collapse the retries to the first failed job.
+   * Money-critical: enqueue a booking ticket and wait until the durable job
+   * reaches `printed`. Each retry uses a unique idempotency key suffix so the
+   * backend does not collapse the retries to the first failed job.
    */
-  const printTalonGuaranteed = useCallback(
+  const printBookingGuaranteed = useCallback(
     async (
-      talonData: TicketData,
-      audit: { bookingId?: string; printerId?: string; idempotencyKeyBase: string },
+      ticketData: TicketData,
+      audit: {
+        bookingId?: string;
+        printerId?: string;
+        idempotencyKeyBase: string;
+      },
       label: string,
       maxRetries = 6,
     ): Promise<void> => {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         const idempotencyKey = `${audit.idempotencyKeyBase}-try${attempt}`;
         try {
-          const jobId = await printerService.enqueueTalon(talonData, {
+          const jobId = await printerService.enqueueBookingTicket(ticketData, {
             bookingId: audit.bookingId,
             printerId: audit.printerId,
             idempotencyKey,
@@ -571,7 +435,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
             timeoutMs: 25000,
             pollMs: 600,
           });
-          if (job.status === 'printed') return;
+          if (job.status === "printed") return;
           throw new Error(job.lastError || `print failed (jobId=${jobId})`);
         } catch (err) {
           console.warn(
@@ -610,55 +474,53 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         const response = isOnline()
           ? await doRequest()
           : await (async () => {
-              const id = newActionId('offline');
+              const id = newActionId("offline");
               await enqueueOfflineAction({
                 id,
-                type: 'createBookingByQueueEntry',
+                type: "createBookingByQueueEntry",
                 payload: {
                   queueEntryId: selectedVehicleForBooking.id,
                   seats: selectedSeats.length,
                   idempotencyKey: bookingIdempotencyKey,
                 },
               });
-              throw new Error('OFFLINE_QUEUED');
+              throw new Error("OFFLINE_QUEUED");
             })();
-        console.log('Booking response:', response);
+        console.log("Booking response:", response);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const bookings = (response as any).data.bookings || [];
-        console.log('Parsed booking data:', { bookings: bookings.length });
+        console.log("Parsed booking data:", { bookings: bookings.length });
         const vehicleLP =
           bookings[0]?.licensePlate || selectedVehicleForBooking.licensePlate;
         const bookedSeatsCount = bookings.length || selectedSeats.length;
 
         const failedPrints: number[] = [];
         for (const booking of bookings) {
-          const talonData: TicketData = {
-            licensePlate: booking.licensePlate || selectedVehicleForBooking.licensePlate,
+          const ticketData: TicketData = {
+            licensePlate:
+              booking.licensePlate || selectedVehicleForBooking.licensePlate,
             destinationName: station.selected.destinationName,
             seatNumber: booking.seatNumber || 1,
             totalAmount: booking.totalAmount,
             basePrice: station.selected.basePrice || 0,
-            createdBy:
-              booking.createdByName ||
-              booking.createdBy ||
-              `${staffInfo?.firstName ?? ''} ${staffInfo?.lastName ?? ''}`.trim() ||
-              'Staff',
+            ...bookingPrintStaffFields(booking, staffInfo),
             createdAt: booking.createdAt,
-            stationName: '',
-            routeName: '',
+            stationName: "",
+            routeName: "",
+            firstTripOfDay: booking.firstTripOfDay === true,
           };
           try {
-            await printTalonGuaranteed(
-              talonData,
+            await printBookingGuaranteed(
+              ticketData,
               {
                 bookingId: booking.id,
-                idempotencyKeyBase: `talon-${booking.id}-${talonData.seatNumber}-${bookingIdempotencyKey}`,
+                idempotencyKeyBase: `booking-${booking.id}-${ticketData.seatNumber}-${bookingIdempotencyKey}`,
               },
               `seat #${booking.seatNumber}`,
             );
           } catch (err) {
             console.error(
-              'Failed to print ticket after retries for booking:',
+              "Failed to print ticket after retries for booking:",
               booking.id,
               err,
             );
@@ -667,22 +529,22 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         }
         const printError =
           failedPrints.length > 0
-            ? new Error(`Tickets non imprimés: #${failedPrints.join(', #')}`)
+            ? new Error(`Tickets non imprimés: #${failedPrints.join(", #")}`)
             : null;
 
-        let notificationMessage = `Réservation réussie: ${vehicleLP} - ${bookedSeatsCount} ticket${bookedSeatsCount === 1 ? '' : 's'}`;
+        let notificationMessage = `Réservation réussie: ${vehicleLP} - ${bookedSeatsCount} ticket${bookedSeatsCount === 1 ? "" : "s"}`;
         if (printError) {
           notificationMessage += ` (Erreur impression: ${printError.message || "Problème d'impression du ticket"})`;
         } else {
           notificationMessage += ` imprimé`;
         }
 
-        showNotification(notificationMessage, printError ? 'error' : 'success');
+        showNotification(notificationMessage, printError ? "error" : "success");
       } else {
         console.log(
-          'Creating booking by destination:',
+          "Creating booking by destination:",
           station.selected.destinationId,
-          'seats:',
+          "seats:",
           selectedSeats.length,
         );
         const doRequest = async () =>
@@ -695,10 +557,10 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         const response = isOnline()
           ? await doRequest()
           : await (async () => {
-              const id = newActionId('offline');
+              const id = newActionId("offline");
               await enqueueOfflineAction({
                 id,
-                type: 'createBookingByDestination',
+                type: "createBookingByDestination",
                 payload: {
                   destinationId: station.selected!.destinationId,
                   seats: selectedSeats.length,
@@ -706,7 +568,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
                   preferExactFit: true,
                 },
               });
-              throw new Error('OFFLINE_QUEUED');
+              throw new Error("OFFLINE_QUEUED");
             })();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const b: any = (response as any).data;
@@ -717,43 +579,43 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
           const perSeatAmount = (b.totalAmount || 0) / seatsBooked;
           for (let i = 0; i < seatsBooked; i++) {
             const seatNum = (b.seatNumber || 1) + i;
-            const talonData: TicketData = {
-              licensePlate: b.licensePlate || 'Attribué automatiquement',
+            const ticketData: TicketData = {
+              licensePlate: b.licensePlate || "Attribué automatiquement",
               destinationName: station.selected.destinationName,
               seatNumber: seatNum,
               totalAmount: perSeatAmount,
               basePrice: station.selected.basePrice || 0,
-              createdBy:
-                b.createdByName ||
-                b.createdBy ||
-                `${staffInfo?.firstName ?? ''} ${staffInfo?.lastName ?? ''}`.trim() ||
-                'Agent',
+              ...bookingPrintStaffFields(b, staffInfo),
               createdAt: b.createdAt || new Date().toISOString(),
-              stationName: '',
-              routeName: '',
+              stationName: "",
+              routeName: "",
+              firstTripOfDay: b.firstTripOfDay === true,
             };
             try {
-              await printTalonGuaranteed(
-                talonData,
+              await printBookingGuaranteed(
+                ticketData,
                 {
                   bookingId: b.id,
-                  idempotencyKeyBase: `dest-talon-${b.id}-${seatNum}-${bookingIdempotencyKey}`,
+                  idempotencyKeyBase: `dest-booking-${b.id}-${seatNum}-${bookingIdempotencyKey}`,
                 },
                 `seat #${seatNum}`,
               );
             } catch (err) {
-              console.error('Failed to print ticket after retries:', err);
+              console.error("Failed to print ticket after retries:", err);
               failedDestPrints.push(seatNum);
             }
           }
         }
 
-        const label = b?.licensePlate || 'Attribué automatiquement';
-        const msg = `Réservation réussie: ${label} - ${selectedSeats.length} ticket${selectedSeats.length === 1 ? '' : 's'} imprimé`;
+        const label = b?.licensePlate || "Attribué automatiquement";
+        const msg = `Réservation réussie: ${label} - ${selectedSeats.length} ticket${selectedSeats.length === 1 ? "" : "s"} imprimé`;
         if (failedDestPrints.length > 0) {
-          showNotification(msg + ` (Échec impression: #${failedDestPrints.join(', #')})`, 'error');
+          showNotification(
+            msg + ` (Échec impression: #${failedDestPrints.join(", #")})`,
+            "error",
+          );
         } else {
-          showNotification(msg, 'success');
+          showNotification(msg, "success");
         }
       }
 
@@ -761,19 +623,21 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
       setSelectedSeats([1]);
 
       console.log(
-        `Successfully booked ${selectedSeats.length} seats for ${selectedVehicleForBooking?.licensePlate || 'auto-selected vehicle'} on route ${station.selected.destinationName}`,
+        `Successfully booked ${selectedSeats.length} seats for ${selectedVehicleForBooking?.licensePlate || "auto-selected vehicle"} on route ${station.selected.destinationName}`,
       );
     } catch (error) {
-      console.error('Échec de la création de la réservation :', error);
+      console.error("Échec de la création de la réservation :", error);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const raw = (error as any)?.message || 'Échec de la création de la réservation. Veuillez réessayer.';
-      if (raw === 'OFFLINE_QUEUED') {
+      const raw =
+        (error as any)?.message ||
+        "Échec de la création de la réservation. Veuillez réessayer.";
+      if (raw === "OFFLINE_QUEUED") {
         showNotification(
-          'Hors ligne: action mise en attente. Elle sera synchronisée dès que le réseau revient.',
-          'success',
+          "Hors ligne: action mise en attente. Elle sera synchronisée dès que le réseau revient.",
+          "success",
         );
       } else {
-        showNotification(raw, 'error');
+        showNotification(raw, "error");
       }
     } finally {
       setBookingLoading(false);
@@ -785,7 +649,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     bookingLoading,
     staffInfo,
     showNotification,
-    printTalonGuaranteed,
+    printBookingGuaranteed,
   ]);
 
   // ── Ghost mode ───────────────────────────────────────────────────────────
@@ -809,7 +673,13 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
   }, []);
 
   const handleGhostDestinationSelect = useCallback(
-    (destination: { id: string; name: string; basePrice: number; isActive: boolean }) => {
+    (destination: {
+      id: string;
+      name: string;
+      basePrice: number;
+      serviceFee: number;
+      isActive: boolean;
+    }) => {
       const summaryDestination: Summary = {
         destinationId: destination.id,
         destinationName: destination.name,
@@ -817,6 +687,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         totalSeats: 0,
         availableSeats: 0,
         basePrice: destination.basePrice,
+        serviceFee: destination.serviceFee ?? 0.2,
       };
       setSelectedGhostDestination(summaryDestination);
     },
@@ -840,7 +711,7 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     const idempotencyKey = generateIdempotencyKey();
     ghostLastActionRef.current = { idempotencyKey, destinationId, seats };
 
-    console.log('[GhostBookingFlow] click', {
+    console.log("[GhostBookingFlow] click", {
       destinationId,
       seats,
       idempotencyKey,
@@ -852,30 +723,38 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     ghostDebounceRef.current = window.setTimeout(async () => {
       let bookingsCreated = false;
       try {
-        console.log('[GhostBookingFlow] create_request', { destinationId, seats, idempotencyKey });
+        console.log("[GhostBookingFlow] create_request", {
+          destinationId,
+          seats,
+          idempotencyKey,
+        });
         if (!isOnline()) {
-          const id = newActionId('offline');
+          const id = newActionId("offline");
           await enqueueOfflineAction({
             id,
-            type: 'createGhostBooking',
+            type: "createGhostBooking",
             payload: { destinationId, seats, idempotencyKey },
           });
           showNotification(
-            'Hors ligne: réservation fantôme mise en attente (sync auto).',
-            'success',
+            "Hors ligne: réservation fantôme mise en attente (sync auto).",
+            "success",
           );
           return;
         }
-        const response = await createGhostBooking(destinationId, seats, idempotencyKey);
+        const response = await createGhostBooking(
+          destinationId,
+          seats,
+          idempotencyKey,
+        );
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const bookings: any[] = (response as any).data?.bookings || [];
 
         if (bookings.length === 0) {
-          throw new Error('Ghost booking response returned no bookings');
+          throw new Error("Ghost booking response returned no bookings");
         }
 
         bookingsCreated = true;
-        console.log('[GhostBookingFlow] create_response', {
+        console.log("[GhostBookingFlow] create_response", {
           count: bookings.length,
           idempotencyKey,
         });
@@ -887,13 +766,17 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
             : undefined;
 
         const lastBooking = bookings[bookings.length - 1];
+        const ghostStaff = bookingPrintStaffFields(lastBooking, staffInfo);
         setLastGhostBookingForReprint({
           bookingId: lastBooking.id,
           seatNumber: lastBooking.seatNumber,
           destinationName: selectedGhostDestination.destinationName,
           totalAmount: lastBooking.totalAmount ?? 0,
-          basePrice: selectedGhostDestination.basePrice || lastBooking.basePrice || 0,
-          createdBy: lastBooking.createdByName || 'Agent',
+          basePrice:
+            selectedGhostDestination.basePrice || lastBooking.basePrice || 0,
+          createdBy: ghostStaff.createdBy,
+          staffFirstName: ghostStaff.staffFirstName,
+          staffLastName: ghostStaff.staffLastName,
           createdAt: lastBooking.createdAt || new Date().toISOString(),
         });
 
@@ -903,49 +786,53 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         const printRequestId = generateIdempotencyKey();
         const ghostFailedPrints: number[] = [];
         for (const booking of bookings) {
-          const talonData: TicketData = {
-            licensePlate: 'N/A',
+          const ticketData: TicketData = {
+            licensePlate: "N/A",
             destinationName: selectedGhostDestination.destinationName,
             seatNumber: booking.seatNumber,
             totalAmount: booking.totalAmount ?? 0,
-            basePrice: selectedGhostDestination.basePrice || booking.basePrice || 0,
-            createdBy: booking.createdByName || 'Agent',
+            basePrice:
+              selectedGhostDestination.basePrice || booking.basePrice || 0,
+            ...bookingPrintStaffFields(booking, staffInfo),
             createdAt: booking.createdAt || new Date().toISOString(),
-            stationName: '',
-            routeName: '',
+            stationName: "",
+            routeName: "",
           };
 
-          console.log('[GhostBookingFlow] print_request', {
+          console.log("[GhostBookingFlow] print_request", {
             bookingId: booking.id,
             seatNumber: booking.seatNumber,
             printerId,
           });
           try {
             if (!isOnline()) {
-              const id = newActionId('offline');
+              const id = newActionId("offline");
               await enqueueOfflineAction({
                 id,
-                type: 'printTalon',
-                payload: { ticketData: talonData, audit: { bookingId: booking.id, printerId } },
+                type: "printBookingTicket",
+                payload: {
+                  ticketData,
+                  audit: { bookingId: booking.id, printerId },
+                },
               });
             } else {
-              await printTalonGuaranteed(
-                talonData,
+              await printBookingGuaranteed(
+                ticketData,
                 {
                   bookingId: booking.id,
                   printerId,
-                  idempotencyKeyBase: `ghost-talon-${booking.id}-${booking.seatNumber}-${printRequestId}`,
+                  idempotencyKeyBase: `ghost-booking-${booking.id}-${booking.seatNumber}-${printRequestId}`,
                 },
                 `ghost seat #${booking.seatNumber}`,
               );
             }
-            console.log('[GhostBookingFlow] print_result', {
+            console.log("[GhostBookingFlow] print_result", {
               ok: true,
               bookingId: booking.id,
               seatNumber: booking.seatNumber,
             });
           } catch (err) {
-            console.error('[GhostBookingFlow] print_error after retries', {
+            console.error("[GhostBookingFlow] print_error after retries", {
               bookingId: booking.id,
               err,
             });
@@ -956,24 +843,28 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
         if (ghostFailedPrints.length > 0) {
           setGhostPrintFailed(true);
           showNotification(
-            `${bookings.length} réservation(s) créée(s), impression échouée: #${ghostFailedPrints.join(', #')}`,
-            'error',
+            `${bookings.length} réservation(s) créée(s), impression échouée: #${ghostFailedPrints.join(", #")}`,
+            "error",
           );
         } else {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const seatNumbers = bookings.map((b: any) => `#${b.seatNumber}`).join(', ');
+          const seatNumbers = bookings
+            .map((b: any) => `#${b.seatNumber}`)
+            .join(", ");
           showNotification(
             `${bookings.length} ticket(s) fantôme(s) imprimé(s): ${seatNumbers} — ${selectedGhostDestination.destinationName}`,
-            'success',
+            "success",
           );
         }
 
         setSelectedSeats([1]);
       } catch (error) {
-        console.error('[GhostBookingFlow] error', error);
+        console.error("[GhostBookingFlow] error", error);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const message = (error as any)?.message || 'Échec de la création/impression de la réservation fantôme.';
-        showNotification(message, 'error');
+        const message =
+          (error as any)?.message ||
+          "Échec de la création/impression de la réservation fantôme.";
+        showNotification(message, "error");
         if (bookingsCreated) {
           setGhostPrintFailed(true);
         }
@@ -986,8 +877,9 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     selectedSeats.length,
     bookingLoading,
     showNotification,
-    printTalonGuaranteed,
+    printBookingGuaranteed,
     generateIdempotencyKey,
+    staffInfo,
   ]);
 
   const handleReprintLastGhostTicket = useCallback(async () => {
@@ -997,47 +889,59 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     try {
       const printerCfg = await printerService.getPrinterConfig();
       const printerId =
-        printerCfg?.ip && printerCfg?.port ? `${printerCfg.ip}:${printerCfg.port}` : undefined;
-      const talonData: TicketData = {
-        licensePlate: 'N/A',
+        printerCfg?.ip && printerCfg?.port
+          ? `${printerCfg.ip}:${printerCfg.port}`
+          : undefined;
+      const ticketData: TicketData = {
+        licensePlate: "N/A",
         destinationName: lastGhostBookingForReprint.destinationName,
         seatNumber: lastGhostBookingForReprint.seatNumber,
         totalAmount: lastGhostBookingForReprint.totalAmount,
         basePrice: lastGhostBookingForReprint.basePrice || 0,
+        staffFirstName: lastGhostBookingForReprint.staffFirstName ?? "",
+        staffLastName: lastGhostBookingForReprint.staffLastName ?? "",
         createdBy: lastGhostBookingForReprint.createdBy,
         createdAt: lastGhostBookingForReprint.createdAt,
-        stationName: '',
-        routeName: '',
+        stationName: "",
+        routeName: "",
       };
-      console.log('[GhostBookingFlow] reprint_request', {
+      console.log("[GhostBookingFlow] reprint_request", {
         bookingId: lastGhostBookingForReprint.bookingId,
         printerId,
       });
-      await printTalonGuaranteed(
-        talonData,
+      await printBookingGuaranteed(
+        ticketData,
         {
           bookingId: lastGhostBookingForReprint.bookingId,
           printerId,
-          idempotencyKeyBase: `ghost-reprint-${lastGhostBookingForReprint.bookingId}`,
+          idempotencyKeyBase: `ghost-booking-reprint-${lastGhostBookingForReprint.bookingId}`,
         },
         `ghost reprint #${lastGhostBookingForReprint.seatNumber}`,
       );
-      console.log('[GhostBookingFlow] reprint_result', {
+      console.log("[GhostBookingFlow] reprint_result", {
         ok: true,
         bookingId: lastGhostBookingForReprint.bookingId,
       });
       setGhostPrintFailed(false);
       showNotification(
         `Réimpression réussie: Ticket #${lastGhostBookingForReprint.seatNumber}`,
-        'success',
+        "success",
       );
     } catch (err) {
-      console.error('[GhostBookingFlow] reprint_error', err);
-      showNotification('Échec de la réimpression. Vérifiez l’imprimante.', 'error');
+      console.error("[GhostBookingFlow] reprint_error", err);
+      showNotification(
+        "Échec de la réimpression. Vérifiez l’imprimante.",
+        "error",
+      );
     } finally {
       setBookingLoading(false);
     }
-  }, [lastGhostBookingForReprint, bookingLoading, showNotification, printTalonGuaranteed]);
+  }, [
+    lastGhostBookingForReprint,
+    bookingLoading,
+    showNotification,
+    printBookingGuaranteed,
+  ]);
 
   // ── Cross-state effects (booking <-> queue sync) ─────────────────────────
   // 1. Restore the previously selected vehicle whenever the queue refreshes.
@@ -1074,7 +978,11 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
       saveSelectedVehicle(null);
       setSelectedSeats([]);
     }
-  }, [selectedVehicleForBooking, isSelectedVehicleStillInQueue, saveSelectedVehicle]);
+  }, [
+    selectedVehicleForBooking,
+    isSelectedVehicleStillInQueue,
+    saveSelectedVehicle,
+  ]);
 
   // 4. Default seat count to 1 once a destination is picked (no specific
   // vehicle).
@@ -1096,29 +1004,38 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     const run = () =>
       processOfflineQueue(async (a) => {
         switch (a.type) {
-          case 'createBookingByQueueEntry':
+          case "createBookingByQueueEntry":
             await createBookingByQueueEntry(a.payload);
             return;
-          case 'createBookingByDestination':
+          case "createBookingByDestination":
             await createBookingByDestination(a.payload);
             return;
-          case 'createGhostBooking':
+          case "createGhostBooking":
             await createGhostBooking(
               a.payload.destinationId,
               a.payload.seats,
               a.payload.idempotencyKey,
             );
             return;
-          case 'printTalon':
-            await printerService.printTalon(a.payload.ticketData, a.payload.audit);
+          case "printTalon":
+            await printerService.printTalon(
+              a.payload.ticketData,
+              a.payload.audit,
+            );
+            return;
+          case "printBookingTicket":
+            await printerService.printBookingTicket(
+              a.payload.ticketData,
+              a.payload.audit,
+            );
             return;
         }
       });
     const t = window.setInterval(run, 3000);
-    window.addEventListener('online', run);
+    window.addEventListener("online", run);
     return () => {
       window.clearInterval(t);
-      window.removeEventListener('online', run);
+      window.removeEventListener("online", run);
     };
   }, []);
 
@@ -1143,31 +1060,6 @@ export function usePosWorkflow({ station, showNotification }: UsePosWorkflowOpti
     handleDragEnd,
     handleMoveUp,
     handleMoveDown,
-
-    // Per-row queue actions
-    handleRemoveFromQueue,
-    handleTransferSeats,
-    handleChangeDestination,
-
-    // Modals: transfer
-    transferModalOpen,
-    setTransferModalOpen,
-    transferFromEntry,
-    setTransferFromEntry,
-    transferSeatsCount,
-    setTransferSeatsCount,
-    transferSearchQuery,
-    setTransferSearchQuery,
-    handleConfirmTransfer,
-
-    // Modals: change destination
-    changeDestModalOpen,
-    setChangeDestModalOpen,
-    changeDestFromEntry,
-    setChangeDestFromEntry,
-    authorizedStations,
-    loadingStations,
-    handleConfirmChangeDestination,
 
     // Modals: add vehicle
     addVehicleModalOpen,

@@ -14,6 +14,7 @@ export type Summary = {
   totalSeats: number;
   availableSeats: number;
   basePrice: number;
+  serviceFee: number;
 };
 
 export type QueueEntry = {
@@ -32,6 +33,7 @@ export type Destination = {
   id: string;
   name: string;
   basePrice: number;
+  serviceFee: number;
   isActive: boolean;
 };
 
@@ -54,5 +56,7 @@ export type GhostBookingForReprint = {
   totalAmount: number;
   basePrice?: number;
   createdBy: string;
+  staffFirstName?: string;
+  staffLastName?: string;
   createdAt: string;
 };

@@ -58,7 +58,7 @@ export default function InitScreen({ onReady }: Props) {
       // 2. Preload company logo from backend
       setPhase("loading-assets");
       const logoUrl = initRes.company.logoUrl
-        ? `${API.queue}${initRes.company.logoUrl}`
+        ? `${API.queue}${initRes.company.logoUrl}?v=boot-logo-20260427`
         : null;
 
       if (logoUrl) {
@@ -101,7 +101,7 @@ export default function InitScreen({ onReady }: Props) {
         <div className="w-full max-w-sm text-center">
           {displayLogo && (
             <div className="flex items-center justify-center" style={{ animation: 'fadeSlideUp 0.5s ease-out both' }}>
-              <img src={displayLogo} alt={companyName || "Company"} className="h-24 w-24 object-contain" />
+              <img src={displayLogo} alt={companyName || "Company"} className="h-32 w-32 object-contain" />
             </div>
           )}
 

@@ -64,5 +64,10 @@ contextBridge.exposeInMainWorld("wasla", {
     jobId?: string;
   }) => ipcRenderer.invoke("wasla:print-bytes", payload),
   checkPrinter: () => ipcRenderer.invoke("wasla:check-printer"),
+  updateCustomerDisplay: (payload: {
+    title?: string;
+    line1?: string;
+    line2?: string;
+  }) => ipcRenderer.invoke("wasla:customer-display-update", payload),
   installCh341Driver: () => ipcRenderer.invoke("wasla:install-ch341-driver"),
 });

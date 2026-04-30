@@ -1,9 +1,10 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { posLog } from './posLogger'
 import { describeWriteError, preflightCheck, type PrinterHealthResult } from './printerHealth'
 import {
@@ -44,6 +45,160 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 let win: BrowserWindow | null
+let customerWin: BrowserWindow | null = null
+
+type CustomerDisplayState = {
+  title?: string
+  line1?: string
+  line2?: string
+}
+
+const CFD_SERIAL_PORTS = ['/dev/ttyS0', '/dev/ttyS1', '/dev/ttyS2', '/dev/ttyS3']
+const cfdWriteQueue: Map<string, Promise<unknown>> = new Map()
+
+function normalizePriceForCfd(state: CustomerDisplayState): string {
+  const source = `${state.line2 || ''} ${state.line1 || ''}`
+  const m = source.match(/(\d+(?:[.,]\d{1,3})?)/)
+  if (!m) return '0.000'
+  const n = Number(m[1].replace(',', '.'))
+  if (!Number.isFinite(n)) return '0.000'
+  return n.toFixed(3)
+}
+
+async function writePriceToCfdSerial(price: string): Promise<void> {
+  if (process.platform !== 'linux') return
+  const baud = String(process.env.WASLA_CFD_BAUD || '9600').trim() || '9600'
+  // Default to the first serial port; writing to all ports can corrupt output.
+  const selectedPort = String(process.env.WASLA_CFD_PORT || '/dev/ttyS0').trim() || '/dev/ttyS0'
+  const targetPorts = CFD_SERIAL_PORTS.includes(selectedPort) ? [selectedPort] : [selectedPort, ...CFD_SERIAL_PORTS]
+  const line = price.padStart(20, ' ').slice(-20)
+  // Epson/compatible customer display line-2 command + fallback plain text.
+  const payload = Buffer.concat([
+    Buffer.from([0x0c]), // clear
+    Buffer.from([0x1b, 0x51, 0x42]), // ESC Q B (write second line on many pole displays)
+    Buffer.from(line, 'ascii'),
+    Buffer.from('\r\n', 'ascii'),
+  ])
+
+  for (const port of targetPorts) {
+    try {
+      const previous = cfdWriteQueue.get(port) || Promise.resolve()
+      let release: () => void = () => {}
+      let fail: (_err: Error) => void = () => {}
+      const next = new Promise<void>((resolve, reject) => {
+        release = resolve
+        fail = reject
+      })
+      const tail = next.catch(() => undefined)
+      cfdWriteQueue.set(port, tail)
+      try {
+        await previous
+        spawnSync(
+          'stty',
+          ['-F', port, baud, 'cs8', '-cstopb', '-parenb', '-ixon', '-ixoff', '-crtscts', '-echo', 'raw'],
+          { stdio: 'ignore' },
+        )
+        const handle = await fs.promises.open(port, 'a')
+        try {
+          await handle.write(payload)
+        } finally {
+          await handle.close()
+        }
+        release()
+      } catch (e) {
+        fail(e as Error)
+        continue
+      } finally {
+        if (cfdWriteQueue.get(port) === tail) cfdWriteQueue.delete(port)
+      }
+      // Stop at first successful write to avoid duplicate/mixed frames.
+      return
+    } catch {
+      // Try next port.
+    }
+  }
+}
+
+function customerDisplayHtml(state: CustomerDisplayState): string {
+  const esc = (s?: string) =>
+    String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+  const title = esc(state.title || 'WASLA')
+  const line1 = esc(state.line1 || 'Bienvenue')
+  const line2 = esc(state.line2 || 'Merci')
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data:;" />
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #001a27; color: #b9f6ca; font-family: Arial, sans-serif; }
+      .wrap { height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 20px; text-align: center; }
+      .title { color: #ffffff; font-size: 40px; font-weight: 700; letter-spacing: 1px; }
+      .l1 { font-size: 48px; font-weight: 700; color: #ffffff; }
+      .l2 { font-size: 42px; font-weight: 700; color: #7CFC98; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="title">${title}</div>
+      <div class="l1">${line1}</div>
+      <div class="l2">${line2}</div>
+    </div>
+  </body>
+</html>`
+}
+
+function closeCustomerDisplay() {
+  if (customerWin && !customerWin.isDestroyed()) customerWin.close()
+  customerWin = null
+}
+
+function ensureCustomerDisplayWindow() {
+  const displays = screen.getAllDisplays()
+  if (displays.length < 2) {
+    closeCustomerDisplay()
+    return null
+  }
+  const target = displays[1]
+  if (customerWin && !customerWin.isDestroyed()) return customerWin
+  customerWin = new BrowserWindow({
+    x: target.bounds.x,
+    y: target.bounds.y,
+    width: target.bounds.width,
+    height: target.bounds.height,
+    frame: false,
+    fullscreen: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    kiosk: true,
+    movable: false,
+    resizable: false,
+    focusable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  customerWin.on('closed', () => {
+    customerWin = null
+  })
+  return customerWin
+}
+
+function updateCustomerDisplay(state: CustomerDisplayState) {
+  const numericPrice = normalizePriceForCfd(state)
+  void writePriceToCfdSerial(numericPrice)
+  const w = ensureCustomerDisplayWindow()
+  if (!w) return { ok: false, reason: 'no-second-display' }
+  const html = customerDisplayHtml(state)
+  const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+  w.loadURL(dataUrl).catch(() => undefined)
+  return { ok: true }
+}
 
 // ---------------------------------------------------------------------------
 // Staff machine identity (POS vs normal)
@@ -260,6 +415,9 @@ function registerWaslaIPC() {
   // operator-facing "Tester l'imprimante" button (kiosk UI, later phase)
   // and for stress scripts that need to confirm device health between runs.
   ipcMain.handle('wasla:check-printer', async () => refreshPrinterHealth())
+  ipcMain.handle('wasla:customer-display-update', async (_event, payload: CustomerDisplayState) =>
+    updateCustomerDisplay(payload || {}),
+  )
 
   // wasla:print-bytes — write base64-decoded ESC/POS bytes to the local
   // USB printer. Always returns a structured result instead of throwing so
@@ -412,6 +570,14 @@ app.whenReady().then(async () => {
   }
 
   createWindow()
+  // Show default message when customer display exists.
+  updateCustomerDisplay({ title: 'WASLA', line1: 'Bienvenue', line2: 'Merci' })
+  screen.on('display-added', () => {
+    updateCustomerDisplay({ title: 'WASLA', line1: 'Bienvenue', line2: 'Merci' })
+  })
+  screen.on('display-removed', () => {
+    ensureCustomerDisplayWindow()
+  })
 
   try {
     const iconPath = path.join(process.env.VITE_PUBLIC!, 'icons', 'icon-256x256.png')

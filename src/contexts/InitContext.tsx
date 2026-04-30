@@ -17,7 +17,8 @@ export function useInitData(): InitData {
 export function useCompanyLogoUrl(): string {
   const ctx = useContext(InitContext);
   if (!ctx?.company.logoUrl) return "";
-  return `${API.queue}${ctx.company.logoUrl}`;
+  // Cache-bust to avoid stale logos persisted by Electron/webview cache on POS.
+  return `${API.queue}${ctx.company.logoUrl}?v=logo-refresh-20260427`;
 }
 
 export function useCompanyName(): string {

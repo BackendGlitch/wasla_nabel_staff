@@ -356,7 +356,7 @@ export async function healthWS() {
 export interface InitData {
   station: { id: string; name: string; governorate: string; delegation: string; address: string; openingTime: string; closingTime: string; serviceFee: number };
   company: { name: string; logoUrl: string };
-  destinations: Array<{ id: string; name: string; basePrice: number }>;
+  destinations: Array<{ id: string; name: string; basePrice: number; serviceFee: number }>;
 }
 
 export async function fetchInit(): Promise<InitData> {
@@ -398,5 +398,5 @@ export async function getTodayBookedTicketsByDestination(destinationId?: string)
 
 // Get all destinations from routes table
 export async function getAllDestinations() {
-  return request<{ data: Array<{ id: string; name: string; basePrice: number; isActive: boolean }> }>(API.queue, "/api/v1/destinations");
+  return request<{ data: Array<{ id: string; name: string; basePrice: number; serviceFee: number; isActive: boolean }> }>(API.queue, "/api/v1/destinations");
 }

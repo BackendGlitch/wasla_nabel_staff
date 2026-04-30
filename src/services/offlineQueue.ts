@@ -2,7 +2,8 @@ type OfflineActionType =
   | "createGhostBooking"
   | "createBookingByQueueEntry"
   | "createBookingByDestination"
-  | "printTalon";
+  | "printTalon"
+  | "printBookingTicket";
 
 export type OfflineAction = {
   id: string;

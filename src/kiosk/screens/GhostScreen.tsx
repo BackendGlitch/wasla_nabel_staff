@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import type { UseStationData } from '@/kiosk/state/useStationData';
 import type { UsePosWorkflow } from '@/kiosk/state/usePosWorkflow';
+import { updateCustomerDisplay } from '@/services/customerDisplayService';
 
 interface GhostScreenProps {
   station: UseStationData;
@@ -13,6 +14,36 @@ export function GhostScreen({ station, workflow }: GhostScreenProps) {
       void workflow.handleEnterGhostMode();
     }
   }, [workflow]);
+
+  useEffect(() => {
+    if (!workflow.isGhostMode) return;
+    const seats = workflow.selectedSeats.length;
+    const total =
+      seats *
+      ((workflow.selectedGhostDestination?.basePrice || 0) +
+        (workflow.selectedGhostDestination?.serviceFee ?? 0.2));
+    if (workflow.bookingLoading) {
+      void updateCustomerDisplay({
+        title: 'WASLA',
+        line1: 'Impression...',
+        line2: `${total.toFixed(3)} TND`,
+      });
+      return;
+    }
+    if (workflow.selectedGhostDestination && workflow.selectedSeats.length > 0) {
+      void updateCustomerDisplay({
+        title: workflow.selectedGhostDestination.destinationName,
+        line1: `${seats} place${seats > 1 ? 's' : ''}`,
+        line2: `${total.toFixed(3)} TND`,
+      });
+      return;
+    }
+    void updateCustomerDisplay({
+      title: 'Mode Fantome',
+      line1: 'Selectionnez',
+      line2: 'Merci',
+    });
+  }, [workflow.isGhostMode, workflow.bookingLoading, workflow.selectedGhostDestination, workflow.selectedSeats]);
 
   return (
     <div className="h-full w-full flex flex-col">
@@ -89,7 +120,13 @@ export function GhostScreen({ station, workflow }: GhostScreenProps) {
               <div className="flex items-center justify-center gap-6">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-violet-800 tabular-nums">
-                    {(workflow.selectedSeats.length * (workflow.selectedGhostDestination.basePrice || 0) + (workflow.selectedSeats.length * 0.2)).toFixed(2)}
+                    {(
+                      workflow.selectedSeats.length *
+                      (
+                        (workflow.selectedGhostDestination.basePrice || 0) +
+                        (workflow.selectedGhostDestination.serviceFee ?? 0.2)
+                      )
+                    ).toFixed(2)}
                   </div>
                   <div className="text-xs text-violet-500 mt-0.5">TND total</div>
                 </div>

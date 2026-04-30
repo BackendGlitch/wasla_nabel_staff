@@ -110,6 +110,8 @@ export interface TicketData {
   // Staff information
   staffFirstName?: string;
   staffLastName?: string;
+  /** Until this vehicle’s first completed trip today (any route), talon shows a top-right * on every seat; afterwards false. */
+  firstTripOfDay?: boolean;
 }
 
 export interface PrintAuditFields {
@@ -133,6 +135,22 @@ export class PrinterService {
   setBranding(companyName: string, companyLogoUrl: string) {
     this.defaultBrandName = companyName;
     this.defaultBrandLogoPath = companyLogoUrl;
+  }
+
+  private normalizeLogoRef(logo?: string): string {
+    const v = (logo || '').trim();
+    if (!v) return '';
+    // Backend logo loader expects filesystem-like path (e.g. /assets/company-logo.png),
+    // not full http URL. Convert absolute URL to pathname.
+    if (v.startsWith('http://') || v.startsWith('https://')) {
+      try {
+        const u = new URL(v);
+        return u.pathname || '';
+      } catch {
+        return '';
+      }
+    }
+    return v;
   }
 
   // Get printer configuration from local storage
@@ -235,14 +253,16 @@ export class PrinterService {
   }
 
   private withBranding(data: TicketData): TicketData {
+    const normalizedDataLogo = this.normalizeLogoRef(data.companyLogo || data.brandLogo);
+    const normalizedDefaultLogo = this.normalizeLogoRef(this.defaultBrandLogoPath);
     return {
       ...data,
       // Ensure brand fields are present with fallbacks
       brandName: data.brandName || this.defaultBrandName,
-      brandLogo: data.brandLogo || this.defaultBrandLogoPath,
+      brandLogo: normalizedDataLogo || normalizedDefaultLogo,
       // Map to backend fields
       companyName: data.companyName || data.brandName || this.defaultBrandName,
-      companyLogo: data.companyLogo || data.brandLogo || this.defaultBrandLogoPath,
+      companyLogo: normalizedDataLogo || normalizedDefaultLogo,
     };
   }
 
@@ -425,7 +445,15 @@ export class PrinterService {
   // Helper method to create ticket data from booking
   createTicketDataFromBooking(booking: any, vehicle: any, destination: any, staffName: string, staffFirstName?: string, staffLastName?: string): TicketData {
     const fromApi = typeof booking?.createdByName === 'string' ? booking.createdByName.trim() : ''
-    const displayBy = fromApi || staffName || 'Agent'
+    const fn = (staffFirstName || '').trim()
+    const ln = (staffLastName || '').trim()
+    const jwtName = `${fn} ${ln}`.trim()
+    const technicalLogin = (s: string) => {
+      const low = s.toLowerCase()
+      return low.includes('staff_supervisor') || (!s.includes(' ') && low.startsWith('staff_'))
+    }
+    const resolvedName = jwtName || (fromApi && !technicalLogin(fromApi) ? fromApi : '')
+    const displayBy = resolvedName || staffName || 'Agent'
     return {
       licensePlate: vehicle?.licensePlate || 'Unknown',
       destinationName: destination?.name || 'Unknown Destination',
@@ -433,13 +461,14 @@ export class PrinterService {
       totalAmount: booking?.totalAmount || 0,
       basePrice: destination?.basePrice || vehicle?.basePrice || 0, // Include base price from destination or vehicle
       createdBy: displayBy,
-      createdByName: fromApi,
+      createdByName: resolvedName || undefined,
       createdAt: booking?.createdAt || new Date().toISOString(),
       stationName: 'Station Name', // You might want to get this from context
       routeName: destination?.name || 'Unknown Route',
       // Staff information
-      staffFirstName: staffFirstName || '',
-      staffLastName: staffLastName || '',
+      staffFirstName: fn,
+      staffLastName: ln,
+      firstTripOfDay: booking?.firstTripOfDay === true,
     };
   }
 
@@ -460,6 +489,7 @@ export class PrinterService {
       routeName: ticketData.routeName,
       staffFirstName: staffFirstName || '',
       staffLastName: staffLastName || '',
+      firstTripOfDay: ticketData.firstTripOfDay,
     };
     await this.printTalon(talonData, { bookingId: booking?.id });
   }
