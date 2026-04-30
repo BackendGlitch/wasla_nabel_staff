@@ -171,37 +171,6 @@ export function usePosWorkflow({
     }
   }, []);
 
-  // Stable ref so the queue->restore effect can read the latest queue without
-  // recreating the callback on every render.
-  const queueRef = useRef<QueueEntry[]>(station.queue);
-  queueRef.current = station.queue;
-
-  const restoreSelectedVehicle = useCallback(() => {
-    try {
-      const saved = localStorage.getItem("selectedVehicleForBooking");
-      if (saved) {
-        const savedVehicle = JSON.parse(saved);
-        const currentVehicle = queueRef.current.find(
-          (v) => v.id === savedVehicle.id,
-        );
-        if (currentVehicle) {
-          setSelectedVehicleForBooking(currentVehicle);
-          console.log(
-            "Restored selected vehicle:",
-            currentVehicle.licensePlate,
-          );
-        } else {
-          console.log(
-            "Vehicle not found in queue, keeping selection in localStorage",
-          );
-        }
-      }
-    } catch (error) {
-      console.error("Failed to restore selected vehicle:", error);
-      localStorage.removeItem("selectedVehicleForBooking");
-    }
-  }, []);
-
   // ── DnD / reorder handlers ───────────────────────────────────────────────
   const reorderQueueItems = useCallback(
     async (oldIndex: number, newIndex: number) => {
@@ -944,12 +913,8 @@ export function usePosWorkflow({
   ]);
 
   // ── Cross-state effects (booking <-> queue sync) ─────────────────────────
-  // 1. Restore the previously selected vehicle whenever the queue refreshes.
-  useEffect(() => {
-    if (station.queue.length > 0) {
-      restoreSelectedVehicle();
-    }
-  }, [station.queue, restoreSelectedVehicle]);
+  // 1. Keep booking target explicit: only the user's current click selects a vehicle.
+  // Do not auto-restore previous localStorage selection on refresh/navigation.
 
   // 2. Default seat count to 1 once a vehicle is picked.
   useEffect(() => {

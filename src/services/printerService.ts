@@ -112,6 +112,10 @@ export interface TicketData {
   staffLastName?: string;
   /** Until this vehicle’s first completed trip today (any route), talon shows a top-right * on every seat; afterwards false. */
   firstTripOfDay?: boolean;
+  /** Day pass ticket: ISO timestamps from backend day-pass payload. */
+  purchaseDate?: string;
+  validFrom?: string;
+  validUntil?: string;
 }
 
 export interface PrintAuditFields {
